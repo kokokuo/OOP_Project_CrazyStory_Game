@@ -13,7 +13,7 @@ This is a *Side-Scrolling* game which use the MapStory texture and build a *Sing
 3.  DirectX 2006 (DirectX SDK 9.x-August 2006)
 4.  [game framework](http://www.cc.ntut.edu.tw/~wkchen/game/game4.5.zip)
 5.  game texture from [BannedStory 4](http://www.maplesimulator.com/programs/bannedstory)
-6.  music (forgot...)
+6.  music (some from mapstory music ,other forgot...)
 
 Some screenshot in this game:
 
