@@ -1,0 +1,3710 @@
+/*
+ * mygame.cpp: 本檔案儲遊戲本身的class的implementation
+ * Copyright (C) 2002-2008 Woei-Kae Chen <wkc@csie.ntut.edu.tw>
+ *
+ * This file is part of game, a free game development framework for windows.
+ *
+ * game is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * game is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *
+ * History:
+ *   2002-03-04 V3.1
+ *          Add codes to demostrate the use of CMovingBitmap::ShowBitmap(CMovingBitmap &).
+ *	 2004-03-02 V4.0
+ *      1. Add CGameStateInit, CGameStateRun, and CGameStateOver to
+ *         demonstrate the use of states.
+ *      2. Demo the use of CInteger in CGameStateRun.
+ *   2005-09-13
+ *      Rewrite the codes for CBall and CEraser.
+ *   2005-09-20 V4.2Beta1.
+ *   2005-09-29 V4.2Beta2.
+ *      1. Add codes to display IDC_GAMECURSOR in GameStateRun.
+ *   2006-02-08 V4.2
+ *      1. Revise sample screens to display in English only.
+ *      2. Add code in CGameStateInit to demo the use of PostQuitMessage().
+ *      3. Rename OnInitialUpdate() -> OnInit().
+ *      4. Fix the bug that OnBeginState() of GameStateInit is not called.
+ *      5. Replace AUDIO_CANYON as AUDIO_NTUT.
+ *      6. Add help bitmap to CGameStateRun.
+ *   2006-09-09 V4.3
+ *      1. Rename Move() and Show() as OnMove and OnShow() to emphasize that they are
+ *         event driven.
+ *   2006-12-30
+ *      1. Bug fix: fix a memory leak problem by replacing PostQuitMessage(0) as
+ *         PostMessage(AfxGetMainWnd()->m_hWnd, WM_CLOSE,0,0).
+ *   2008-02-15 V4.4
+ *      1. Add namespace game_framework.
+ *      2. Replace the demonstration of animation as a new bouncing ball.
+ *      3. Use ShowInitProgress(percent) to display loading progress. 
+*/
+
+#include "stdafx.h"
+#include "Resource.h"
+#include <mmsystem.h>
+#include <ddraw.h>
+#include <dsound.h>
+#include <dmusici.h>
+#include "gamelib.h"
+#include "mygame.h"
+#include <ctime>
+#include <cstdlib>
+
+#include <string>
+#include <fstream>
+
+namespace game_framework {
+
+/////////////////////////////////////////////////////////////////////////////
+// CBall: Ball class
+/////////////////////////////////////////////////////////////////////////////
+
+CBall::CBall()
+{
+	is_alive = true;
+	x = y = dx = dy = index = delay_counter = 0;
+}
+
+bool CBall::HitEraser(CEraser *eraser)
+{
+	// 檢測擦子所構成的矩形是否碰到球
+	return HitRectangle(eraser->GetX1(), eraser->GetY1(),
+		   eraser->GetX2(), eraser->GetY2());
+}
+
+bool CBall::HitRectangle(int tx1, int ty1, int tx2, int ty2)
+{
+	int x1 = x+dx;				// 球的左上角x座標
+	int y1 = y+dy;				// 球的左上角y座標
+	int x2 = x1 + bmp.Width();	// 球的右下角x座標
+	int y2 = y1 + bmp.Height();	// 球的右下角y座標
+	//
+	// 檢測球的矩形與參數矩形是否有交集
+	//
+	return (tx2 >= x1 && tx1 <= x2 && ty2 >= y1 && ty1 <= y2);
+}
+
+bool CBall::IsAlive()
+{
+	return is_alive;
+}
+
+void CBall::LoadBitmap()
+{
+	bmp.LoadBitmap(IDB_BALL,RGB(0,0,0));			// 載入球的圖形
+	bmp_center.LoadBitmap(IDB_CENTER,RGB(0,0,0));	// 載入球圓心的圖形
+}
+
+void CBall::OnMove()
+{
+	if (!is_alive)
+		return;
+	delay_counter--;
+	if (delay_counter < 0) {
+		delay_counter = delay;
+		//
+		// 計算球向對於圓心的位移量dx, dy
+		//
+		const int STEPS=18;
+		static const int DIFFX[]={35, 32, 26, 17, 6, -6, -17, -26, -32, -34, -32, -26, -17, -6, 6, 17, 26, 32, };
+		static const int DIFFY[]={0, 11, 22, 30, 34, 34, 30, 22, 11, 0, -11, -22, -30, -34, -34, -30, -22, -11, };
+		index++;
+		if (index >= STEPS)
+			index = 0;
+		dx = DIFFX[index];
+		dy = DIFFY[index];
+	}
+}
+
+void CBall::SetDelay(int d)
+{
+	delay = d;
+}
+
+void CBall::SetIsAlive(bool alive)
+{
+	is_alive = alive;
+}
+
+void CBall::SetXY(int nx, int ny)
+{
+	x = nx; y = ny;
+}
+
+void CBall::OnShow()
+{
+	if (is_alive) {
+		bmp.SetTopLeft(x+dx,y+dy);
+		bmp.ShowBitmap();
+		bmp_center.SetTopLeft(x,y);
+		bmp_center.ShowBitmap();
+	}
+}
+
+/////////////////////////////////////////////////////////////////////////////
+// CBouncingBall: BouncingBall class
+/////////////////////////////////////////////////////////////////////////////
+
+CBouncingBall::CBouncingBall()
+{
+	const int INITIAL_VELOCITY = 20;	// 初始上升速度
+	const int FLOOR = 400;				// 地板座標
+	floor = FLOOR;
+	x = 95; y = FLOOR-1;				// y座標比地板高1點(站在地板上)
+	rising = true; 
+	initial_velocity = INITIAL_VELOCITY;
+	velocity = initial_velocity;
+}
+
+void CBouncingBall::LoadBitmap()
+{
+	char *filename[4]={".\\bitmaps\\ball1.bmp",".\\bitmaps\\ball2.bmp",".\\bitmaps\\ball3.bmp",".\\bitmaps\\ball4.bmp"};
+	for (int i = 0; i < 4; i++)	// 載入動畫(由4張圖形構成)
+		animation.AddBitmap(filename[i], RGB(0,0,0));
+}
+
+void CBouncingBall::OnMove()
+{
+	if (rising) {			// 上升狀態
+		if (velocity > 0) {
+			y -= velocity;	// 當速度 > 0時，y軸上升(移動velocity個點，velocity的單位為 點/次)
+			velocity--;		// 受重力影響，下次的上升速度降低
+		} else {
+			rising = false; // 當速度 <= 0，上升終止，下次改為下降
+			velocity = 1;	// 下降的初速(velocity)為1
+		}
+	} else {				// 下降狀態
+		if (y < floor-1) {  // 當y座標還沒碰到地板
+			y += velocity;	// y軸下降(移動velocity個點，velocity的單位為 點/次)
+			velocity++;		// 受重力影響，下次的下降速度增加
+		} else {
+			y = floor - 1;  // 當y座標低於地板，更正為地板上
+			rising = true;	// 探底反彈，下次改為上升
+			velocity = initial_velocity; // 重設上升初始速度
+		}
+	}
+	animation.OnMove();		// 執行一次animation.OnMove()，animation才會換圖
+}
+
+void CBouncingBall::OnShow()
+{
+	animation.SetTopLeft(x,y);
+	animation.OnShow();
+}
+
+/////////////////////////////////////////////////////////////////////////////
+// CEraser: Eraser class
+/////////////////////////////////////////////////////////////////////////////
+
+CEraser::CEraser()
+{
+	Initialize();
+}
+
+int CEraser::GetX1()
+{
+	return x;
+}
+
+int CEraser::GetY1()
+{
+	return y;
+}
+
+int CEraser::GetX2()
+{
+	return x + animation.Width();
+}
+
+int CEraser::GetY2()
+{
+	return y + animation.Height();
+}
+
+void CEraser::Initialize()
+{
+	const int X_POS = 280;
+	const int Y_POS = 400;
+	x = X_POS;
+	y = Y_POS;
+	isMovingLeft = isMovingRight= isMovingUp = isMovingDown = false;
+}
+
+void CEraser::LoadBitmap()
+{
+	animation.AddBitmap(IDB_ERASER1,RGB(255,255,255));
+	animation.AddBitmap(IDB_ERASER2,RGB(255,255,255));
+	animation.AddBitmap(IDB_ERASER3,RGB(255,255,255));
+	animation.AddBitmap(IDB_ERASER2,RGB(255,255,255));
+}
+
+void CEraser::OnMove()
+{
+	const int STEP_SIZE = 2;
+	animation.OnMove();
+	if (isMovingLeft)
+		x -= STEP_SIZE;
+	if (isMovingRight)
+		x += STEP_SIZE;
+	if (isMovingUp)
+		y -= STEP_SIZE;
+	if (isMovingDown)
+		y += STEP_SIZE;
+}
+
+void CEraser::SetMovingDown(bool flag)
+{
+	isMovingDown = flag;
+}
+
+void CEraser::SetMovingLeft(bool flag)
+{
+	isMovingLeft = flag;
+}
+
+void CEraser::SetMovingRight(bool flag)
+{
+	isMovingRight = flag;
+}
+
+void CEraser::SetMovingUp(bool flag)
+{
+	isMovingUp = flag;
+}
+
+void CEraser::SetXY(int nx, int ny)
+{
+	x = nx; y = ny;
+}
+
+void CEraser::OnShow()
+{
+	animation.SetTopLeft(x,y);
+	animation.OnShow();
+}
+
+/////////////////////////////////////////////////////////////////////////////
+// 這個class為遊戲的遊戲開頭畫面物件
+/////////////////////////////////////////////////////////////////////////////
+
+CGameStateInit::CGameStateInit(CGame *g)
+: CGameState(g)
+{
+	IsClickStart = false;
+	IsClickExit = false;
+}
+
+void CGameStateInit::OnInit()
+{
+	//
+	// 當圖很多時，OnInit載入所有的圖要花很多時間。為避免玩遊戲的人
+	//     等的不耐煩，遊戲會出現「Loading ...」，顯示Loading的進度。
+	//
+	ShowInitProgress(0);	// 一開始的loading進度為0%
+	//
+	// 開始載入資料
+	//
+	background.LoadBitmap("Bitmaps/menu/start_background.bmp");
+	start_up.LoadBitmap("Bitmaps/menu/start_up.bmp",RGB(0,255,255));
+	start_bottom.LoadBitmap("Bitmaps/menu/start_bottom.bmp",RGB(0,255,255));
+
+	help_up.LoadBitmap("Bitmaps/menu/help_up.bmp",RGB(0,255,255));
+	help_bottom.LoadBitmap("Bitmaps/menu/help_bottom.bmp",RGB(0,255,255));
+
+	exit_up.LoadBitmap("Bitmaps/menu/exit_up.bmp",RGB(0,255,255));
+	exit_bottom.LoadBitmap("Bitmaps/menu/exit_bottom.bmp",RGB(0,255,255));
+	//
+	Sleep(300);				// 放慢，以便看清楚進度，實際遊戲請刪除此Sleep
+	//
+	// 此OnInit動作會接到CGameStaterRun::OnInit()，所以進度還沒到100%
+	//
+}
+
+void CGameStateInit::OnBeginState()
+{
+}
+
+void CGameStateInit::OnKeyUp(UINT nChar, UINT nRepCnt, UINT nFlags)
+{
+	const char KEY_ESC = 27;
+	const char KEY_SPACE = ' ';
+	if (nChar == KEY_SPACE)
+		GotoGameState(GAME_STATE_RUN);						// 切換至GAME_STATE_RUN
+	else if (nChar == KEY_ESC)								// Demo 關閉遊戲的方法
+		PostMessage(AfxGetMainWnd()->m_hWnd, WM_CLOSE,0,0);	// 關閉遊戲
+}
+
+void CGameStateInit::OnLButtonDown(UINT nFlags, CPoint point)
+{
+	if(point.x<564 && point.x>409){
+		if(point.y<257 && point.y>210){
+			IsClickStart = true;
+			//nFlags =true;
+			this->OnShow();
+			//Sleep(1000);
+			//if(IsClick == true)
+				//this->OnLButtonUp(nFlags,point);
+			
+			//GotoGameState(GAME_STATE_RUN);// 切換至GAME_STATE_RUN
+			
+			
+		}
+	}
+	if(point.x<543 && point.x>429){
+		if(point.y<436 && point.y>369) {
+			IsClickExit = true;
+			//nFlags =true;
+			this->OnShow();
+			//Sleep(1000);
+			//if(IsClick == true)
+				//this->OnLButtonUp(nFlags,point);
+			
+
+			//PostMessage(AfxGetMainWnd()->m_hWnd, WM_CLOSE,0,0);	// 關閉遊戲		
+		}
+	}
+	else
+	{
+		IsClickStart=false;
+		IsClickExit=false;
+		this->OnShow();
+	}
+}
+void CGameStateInit::OnLButtonUp(UINT nFlags, CPoint point)
+{
+	if(point.x<564 && point.x>409){
+		if(point.y<257 && point.y>210){
+			
+			
+			//if(nFlags  == true){
+				//nFlags =false;
+				//IsClickUp = true;
+				GotoGameState(GAME_STATE_RUN);// 切換至GAME_STATE_RUN
+				
+			//}	
+		}
+	}
+	if(point.x<543 && point.x>429){
+		if(point.y<436 && point.y>369) {
+			//IsClick=false;
+			
+			//if(nFlags == true){
+				//nFlags =false;
+				//IsClickUp = true;
+				PostMessage(AfxGetMainWnd()->m_hWnd, WM_CLOSE,0,0);	// 關閉遊戲		
+			//}
+		}
+	}
+	else
+	{
+		IsClickStart=false;
+		IsClickExit=false;
+		this->OnShow();
+	}
+}
+void CGameStateInit::OnShow()
+{
+	//
+	// 貼上logo
+	//
+	background.SetTopLeft((SIZE_X - background.Width())/2, SIZE_Y/8-60);
+	background.ShowBitmap();
+	if(IsClickStart ==false )
+	{
+		start_up.SetTopLeft(409,210);
+		start_up.ShowBitmap();
+	}
+	else if(IsClickStart ==true)
+	{
+		start_bottom.SetTopLeft(409,210);
+		start_bottom.ShowBitmap();
+	}
+	if(IsClickExit ==false )
+	{
+		exit_up.SetTopLeft(429,369);
+		exit_up.ShowBitmap();
+	}
+	else if(IsClickExit ==true)
+	{	
+		exit_bottom.SetTopLeft(429,369);
+		exit_bottom.ShowBitmap();
+	}
+	//
+	// Demo螢幕字型的使用，不過開發時請盡量避免直接使用字型，改用CMovingBitmap比較好
+	//
+	CDC *pDC = CDDraw::GetBackCDC();			// 取得 Back Plain 的 CDC 
+	CFont f,*fp;
+	f.CreatePointFont(160,"Times New Roman");	// 產生 font f; 160表示16 point的字
+	fp=pDC->SelectObject(&f);					// 選用 font f
+	pDC->SetBkColor(RGB(0,0,0));
+	pDC->SetTextColor(RGB(255,255,0));
+	//pDC->TextOut(120,220,"Please click mouse or press SPACE to begin.");
+	//pDC->TextOut(5,395,"Press Ctrl-F to switch in between window mode and full screen mode.");
+	//if (ENABLE_GAME_PAUSE)
+	//	pDC->TextOut(5,425,"Press Ctrl-Q to pause the Game.");
+	//pDC->TextOut(5,455,"Press Alt-F4 or ESC to Quit.");
+	pDC->SelectObject(fp);						// 放掉 font f (千萬不要漏了放掉)
+	CDDraw::ReleaseBackCDC();					// 放掉 Back Plain 的 CDC
+}								
+
+/////////////////////////////////////////////////////////////////////////////
+// 這個class為遊戲的結束狀態(Game Over)
+/////////////////////////////////////////////////////////////////////////////
+
+CGameStateOver::CGameStateOver(CGame *g)
+: CGameState(g)
+{
+}
+
+void CGameStateOver::OnMove()
+{
+	counter--;
+	if (counter < 0)
+		GotoGameState(GAME_STATE_INIT);
+}
+
+void CGameStateOver::OnBeginState()
+{
+	counter = 30 * 5; // 5 seconds
+}
+
+void CGameStateOver::OnInit()
+{
+	//
+	// 當圖很多時，OnInit載入所有的圖要花很多時間。為避免玩遊戲的人
+	//     等的不耐煩，遊戲會出現「Loading ...」，顯示Loading的進度。
+	//
+	ShowInitProgress(66);	// 接個前一個狀態的進度，此處進度視為66%
+	//
+	// 開始載入資料
+	//
+	Sleep(300);				// 放慢，以便看清楚進度，實際遊戲請刪除此Sleep
+	//
+	// 最終進度為100%
+	//
+	ShowInitProgress(100);
+}
+
+void CGameStateOver::OnShow()
+{
+	CDC *pDC = CDDraw::GetBackCDC();			// 取得 Back Plain 的 CDC 
+	CFont f,*fp;
+	f.CreatePointFont(160,"Times New Roman");	// 產生 font f; 160表示16 point的字
+	fp=pDC->SelectObject(&f);					// 選用 font f
+	pDC->SetBkColor(RGB(0,0,0));
+	pDC->SetTextColor(RGB(255,255,0));
+	char str[80];								// Demo 數字對字串的轉換
+	sprintf(str, "Game Over ! (%d)", counter / 30);
+	pDC->TextOut(240,210,str);
+	pDC->SelectObject(fp);						// 放掉 font f (千萬不要漏了放掉)
+	CDDraw::ReleaseBackCDC();					// 放掉 Back Plain 的 CDC
+}
+
+/////////////////////////////////////////////////////////////////////////////
+// 這個class為遊戲的遊戲執行物件，主要的遊戲程式都在這裡
+/////////////////////////////////////////////////////////////////////////////
+
+CGameStateRun::CGameStateRun(CGame *g)
+: CGameState(g), NUMBALLS(28)
+{
+	ball = new CBall [NUMBALLS];
+}
+
+CGameStateRun::~CGameStateRun()
+{
+	delete [] ball;
+}
+
+void CGameStateRun::OnBeginState()
+{
+/*
+	const int BALL_GAP = 90;
+	const int BALL_XY_OFFSET = 45;
+	const int BALL_PER_ROW = 7;
+	const int HITS_LEFT = 10;
+	const int HITS_LEFT_X = 590;
+	const int HITS_LEFT_Y = 0;
+	const int BACKGROUND_X = 60;
+	const int ANIMATION_SPEED = 15;
+	
+	for (int i = 0; i < NUMBALLS; i++) {				// 設定球的起始座標
+		int x_pos = i % BALL_PER_ROW;
+		int y_pos = i / BALL_PER_ROW;
+		ball[i].SetXY(x_pos * BALL_GAP + BALL_XY_OFFSET, y_pos * BALL_GAP + BALL_XY_OFFSET);
+		ball[i].SetDelay(x_pos);
+		ball[i].SetIsAlive(true);
+	}
+
+	eraser.Initialize();
+
+	background.SetTopLeft(BACKGROUND_X,0);				// 設定背景的起始座標
+	help.SetTopLeft(0, SIZE_Y - help.Height());			// 設定說明圖的起始座標
+	hits_left.SetInteger(HITS_LEFT);					// 指定剩下的撞擊數
+	hits_left.SetTopLeft(HITS_LEFT_X,HITS_LEFT_Y);		// 指定剩下撞擊數的座標
+
+	//CAudio::Instance()->Play(AUDIO_Super_Mario, true);			// 撥放 
+	//CAudio::Instance()->Play(AUDIO_LAKE, true);			// 撥放 WAVE
+	//CAudio::Instance()->Play(AUDIO_NTUT, true);			// 撥放 MIDI
+*/
+
+	static int MapId=map.GetMapId();
+	bool over=false;
+	//---------------------------------------------------
+	CAudio::Instance()->Stop(AUDIO_Super_Mario);
+	
+	ShowInitProgress(33);
+	Sleep(200);
+	
+	//是否結束-------------------------------------
+	if( hero.IsAlive()==false) over=true;
+	if(over==true){
+		map.SetMapId(0);
+		CAudio::Instance()->Stop(AUDIO_Super_Mario);
+		//CAudio::Instance()->Stop(AUDIO_LAKE);	// 停止 WAVE
+		//CAudio::Instance()->Stop(AUDIO_NTUT);	// 停止 MIDI
+		GotoGameState(GAME_STATE_OVER);
+	}
+	//人物、地圖、技能初始-----------------------------------
+	if(map.GetIsWin()==true) MapId++;
+	/*暫時*/if(MapId>2) MapId=0;
+	map.SetMapId(MapId);
+	
+	for(int i=0;i<(int)hero.GetSkill().size();i++)
+		hero.GetSkill()[i]->init(&hero,&map);
+	map.SetIsWin(false);
+	
+	map.init();	
+	hero.init();
+	//刪除怪物資料//---------------------------------
+	for(int i=0;i<(int)enemy.size();i++)
+		delete enemy[i];
+	enemy.clear();
+	//建立怪物資料//---------------------------------
+	for(int i=0;i<10;i++){
+		int id=map.GetEnemy_id()[i];
+		int pos_x=map.GetEnemy_pos_x()[i];
+		int pos_y=map.GetEnemy_pos_y()[i];
+		//int num=map.GetEnemy_num()[i];
+	
+		if(id==1)
+			enemy.push_back( new Enemy_son01(pos_x,pos_y) );
+		else if(id==2)
+			enemy.push_back( new Enemy_son02(pos_x,pos_y) );
+		else if(id==3)
+			enemy.push_back( new Enemy_son03(pos_x,pos_y) );
+		else if(id==4)
+			enemy.push_back( new Enemy_son04(pos_x,pos_y) );
+	}
+	//-----------------------------------------------
+	ShowInitProgress(50);
+	Sleep(300);
+	//初始怪物資料//----------------------------------
+	for(int i=0;i< (int)enemy.size();i++){
+		enemy[i]->LoadBitmap();
+		enemy[i]->init(&map);
+	}
+	//-----------------------------------------------
+	ShowInitProgress(87);
+	Sleep(200);
+	CAudio::Instance()->Play(AUDIO_Super_Mario, true);
+	//-----------------------------------------------	
+}
+
+void CGameStateRun::OnMove()							// 移動遊戲元素
+{
+/*
+	//
+	// 如果希望修改cursor的樣式，則將下面程式的commment取消即可
+	//
+	// SetCursor(AfxGetApp()->LoadCursor(IDC_GAMECURSOR));
+	//
+	// 移動背景圖的座標
+	//
+	if (background.Top() > SIZE_Y)
+		background.SetTopLeft(60 ,-background.Height());
+	background.SetTopLeft(background.Left(),background.Top()+1);
+	//
+	// 移動球
+	//
+	int i;
+	for (i=0; i < NUMBALLS; i++)
+		ball[i].OnMove();
+	//
+	// 移動擦子
+	//
+	eraser.OnMove();
+	//
+	// 判斷擦子是否碰到球
+	//
+	for (i=0; i < NUMBALLS; i++)
+		if (ball[i].IsAlive() && ball[i].HitEraser(&eraser)) {
+			ball[i].SetIsAlive(false);
+			CAudio::Instance()->Play(AUDIO_DING);
+			hits_left.Add(-1);
+			//
+			// 若剩餘碰撞次數為0，則跳到Game Over狀態
+			//
+			if (hits_left.GetInteger() <= 0) {
+				CAudio::Instance()->Stop(AUDIO_LAKE);	// 停止 WAVE
+				CAudio::Instance()->Stop(AUDIO_NTUT);	// 停止 MIDI
+				GotoGameState(GAME_STATE_OVER);
+			}
+		}
+	//
+	// 移動彈跳的球
+	//
+	bball.OnMove();
+*/	
+	
+	//---------------------------------------------------
+	map.onMove();
+	hero.onMove(&map,enemy);
+	
+	for(int i=0;i< (int)enemy.size();i++)
+		enemy[i]->onMove(&map,&hero);
+	//是否獲勝--------------------------------------------
+	int count=0;
+	for(int i=0;i< (int)enemy.size();i++)
+		if(enemy[i]->IsAlive())
+			count++;
+	if(count==0)
+		map.SetIsWin(true);
+	//是否換關or結束---------------------------------------------------
+	if(map.GetIsWin()==true || hero.IsAlive()==false)
+		OnBeginState();
+	
+}
+
+void CGameStateRun::OnInit()  								// 遊戲的初值及圖形設定
+{
+	//
+	// 當圖很多時，OnInit載入所有的圖要花很多時間。為避免玩遊戲的人
+	//     等的不耐煩，遊戲會出現「Loading ...」，顯示Loading的進度。
+	//
+	ShowInitProgress(33);	// 接個前一個狀態的進度，此處進度視為33%
+	//
+	// 開始載入資料
+	//
+/*
+	for(int i=0; i < NUMBALLS; i++)	
+		ball[i].LoadBitmap();								// 載入第i個球的圖形
+	eraser.LoadBitmap();
+	background.LoadBitmap(IDB_BACKGROUND);					// 載入背景的圖形
+*/
+
+	map.LoadBitmap();
+	hero.LoadBitmap();
+	hero.LoadAudio();
+
+	//建立怪物資料//--------------------
+	for(int i=0;i<10;i++){
+		int id=map.GetEnemy_id()[i];
+		int pos_x=map.GetEnemy_pos_x()[i];
+
+		int pos_y=map.GetEnemy_pos_y()[i];
+		//int num=map.GetEnemy_num()[i];
+		
+		if(id==1)
+			enemy.push_back( new Enemy_son01(pos_x,pos_y) );
+		else if(id==2)
+			enemy.push_back( new Enemy_son02(pos_x,pos_y) );
+		else if(id==3)
+			enemy.push_back( new Enemy_son03(pos_x,pos_y) );
+		else if(id==4)
+			enemy.push_back( new Enemy_son04(pos_x,pos_y) );
+			
+	}
+	//----------------------------------
+	for(int i=0;i< (int)enemy.size();i++){
+		enemy[i]->LoadBitmap();
+		enemy[i]->init(&map);
+	}
+
+	ShowInitProgress(50);
+	Sleep(300); // 放慢，以便看清楚進度，實際遊戲請刪除此Sleep
+	//
+	// 繼續載入其他資料
+	//
+/*
+	help.LoadBitmap(IDB_HELP,RGB(255,255,255));				// 載入說明的圖形
+	corner.LoadBitmap(IDB_CORNER);							// 載入角落圖形
+	corner.ShowBitmap(background);							// 將corner貼到background
+	bball.LoadBitmap();										// 載入圖形
+	hits_left.LoadBitmap();		
+*/
+	CAudio::Instance()->Load(AUDIO_Super_Mario,  "sounds\\mario_wav\\瑪莉-背景音樂-經典.wav");	
+	CAudio::Instance()->Load(AUDIO_DING,  "sounds\\ding.wav");	// 載入編號0的聲音ding.wav
+	CAudio::Instance()->Load(AUDIO_LAKE,  "sounds\\lake.wav");	// 載入編號1的聲音lake.wav
+	CAudio::Instance()->Load(AUDIO_NTUT,  "sounds\\ntut.mid");	// 載入編號2的聲音ntut.mid
+	//
+	// 此OnInit動作會接到CGameStaterOver::OnInit()，所以進度還沒到100%
+	//
+}
+
+void CGameStateRun::OnKeyDown(UINT nChar, UINT nRepCnt, UINT nFlags)
+{
+	const char KEY_LEFT  = 0x25; // keyboard左箭頭
+	const char KEY_UP    = 0x26; // keyboard上箭頭
+	const char KEY_RIGHT = 0x27; // keyboard右箭頭
+	const char KEY_DOWN  = 0x28; // keyboard下箭頭
+	const char KEY_JUMP	 = ' '; 
+	const char KEY_A = 65;	//技能A
+	const char KEY_S = 83;	//技能S
+	const char KEY_D = 68;	//技能D
+	const char KEY_Z = 90;	//攻擊Z
+
+	if (nChar == KEY_LEFT )
+			hero.SetMovingLeft(true);
+	if (nChar == KEY_RIGHT)
+			hero.SetMovingRight(true);	
+	if (nChar == KEY_DOWN)
+		hero.SetMovingDown(true);
+	if (nChar == KEY_UP)
+		hero.SetMovingUp(true);
+	
+	if(!hero.IsAttack() && !hero.IsSkill() ){
+		
+		if (nChar == KEY_JUMP)
+			hero.SetMovingJump(true);
+	
+		if( nChar == KEY_UP){
+			for(int i=0;i<(int)map.GetRope().size();i++)
+				if( map.GetRope()[i]->isClimb(&hero) && !hero.IsClimb())
+					hero.SetMovingClimb(true);
+		}
+	}
+	if( !hero.IsClimb()){
+		
+		if (nChar == KEY_Z )
+			hero.SetMovingAttack(true);
+		if (nChar == KEY_A )
+				hero.SetMovingSkill_A(true);
+		if (nChar == KEY_S )
+				hero.SetMovingSkill_S(true);
+		if (nChar == KEY_D )
+				hero.SetMovingSkill_D(true);
+	}
+}
+
+void CGameStateRun::OnKeyUp(UINT nChar, UINT nRepCnt, UINT nFlags)
+{
+	const char KEY_LEFT  = 0x25; // keyboard左箭頭
+	const char KEY_UP    = 0x26; // keyboard上箭頭
+	const char KEY_RIGHT = 0x27; // keyboard右箭頭
+	const char KEY_DOWN  = 0x28; // keyboard下箭頭
+
+	if (nChar == KEY_LEFT)
+		hero.SetMovingLeft(false);
+	if (nChar == KEY_RIGHT)
+		hero.SetMovingRight(false);
+	if (nChar == KEY_DOWN)
+		hero.SetMovingDown(false);
+	if (nChar == KEY_UP)
+		hero.SetMovingUp(false);
+}
+
+void CGameStateRun::OnLButtonDown(UINT nFlags, CPoint point){  // 處理滑鼠的動作
+	eraser.SetMovingLeft(true);
+}
+void CGameStateRun::OnLButtonUp(UINT nFlags, CPoint point){	// 處理滑鼠的動作
+	eraser.SetMovingLeft(false);
+}
+void CGameStateRun::OnRButtonDown(UINT nFlags, CPoint point){  // 處理滑鼠的動作
+	eraser.SetMovingRight(true);
+}
+void CGameStateRun::OnRButtonUp(UINT nFlags, CPoint point){	// 處理滑鼠的動作
+	eraser.SetMovingRight(false);
+}
+void CGameStateRun::OnShow()
+{
+/*	
+	//
+	//  注意：Show裡面千萬不要移動任何物件的座標，移動座標的工作應由Move做才對，
+	//        否則當視窗重新繪圖時(OnDraw)，物件就會移動，看起來會很怪。換個術語
+	//        說，Move負責MVC中的Model，Show負責View，而View不應更動Model。
+	//
+	//  貼上背景圖、撞擊數、球、擦子、彈跳的球
+	//
+	background.ShowBitmap();			// 貼上背景圖
+	help.ShowBitmap();					// 貼上說明圖
+	hits_left.ShowBitmap();
+	for (int i=0; i < NUMBALLS; i++)
+		ball[i].OnShow();				// 貼上第i號球
+	bball.OnShow();						// 貼上彈跳的球
+	eraser.OnShow();					// 貼上擦子
+	//
+	//  貼上左上及右下角落的圖
+	//
+	corner.SetTopLeft(0,0);
+	corner.ShowBitmap();
+	corner.SetTopLeft(SIZE_X-corner.Width(), SIZE_Y-corner.Height());
+	corner.ShowBitmap();
+*/
+	map.onShow();
+	for(int i=0;i<(int)enemy.size();i++)
+		enemy[i]->onShow(&map);
+
+	hero.onShow(&map);
+//--------------------------------------------------
+	CDC *pDC = CDDraw::GetBackCDC();			// 取得 Back Plain 的 CDC 
+	CFont f,*fp;
+	f.CreatePointFont(160,"Times New Roman");	// 產生 font f; 160表示16 point的字
+	fp=pDC->SelectObject(&f);					// 選用 font f
+	pDC->SetBkColor(RGB(0,0,0));
+	pDC->SetTextColor(RGB(255,255,0));
+	
+	int count=0;
+	for(int i=0;i< (int)enemy.size();i++)
+		if(enemy[i]->IsAlive())
+			count++;
+
+	char str[80];								// Demo 數字對字串的轉換
+	sprintf(str, "MapId = %d , Map_W = %d , Map_H = %d , Enemy_num = %d",map.GetMapId(),map.GetMapW(),map.GetMapH(),count);
+	
+	pDC->TextOut(5,map.GetPixH()-25,str);
+	
+	pDC->SelectObject(fp);						// 放掉 font f (千萬不要漏了放掉)
+	CDDraw::ReleaseBackCDC();					// 放掉 Back Plain 的 CDC
+//--------------------------------------------------
+}
+
+//###################################################################################################################################
+//-------------------------------------------------------------------------------------
+//遊戲地圖障礙
+Map::Map(){  //原來是120 +40 是因為跳下來時 
+	const int Mapid_init=0;
+	Mapid_now = Mapid_init;
+//	PixW=640,PixH=480;
+	PixW=800,PixH=600;
+	BarrierW = 90;	//地圖裡以陣列來看每一格長多少(點)
+	BarrierH = 30;	//地圖裡以陣列來看每一格高多少(點)
+	numB_x=0;	//x軸共多少格
+	numB_y=0;	//y軸共多少格
+	
+	init();
+}
+Map::~Map(){}
+void Map::init(){
+	
+	SetIsWin(false);
+	//------------------------------------------ 刪除空間
+	for(int i=0;i<(int)movebarrier.size();i++)
+		delete movebarrier[i];
+	movebarrier.clear();
+
+	for(int i=0;i<(int)rope.size();i++)
+		delete rope[i];
+	rope.clear();
+	//------------------------------------------
+	for(int i=0;i<5;i++)
+		enemy_id[i]=0;
+
+	string temp[5]={"01","02","03","04","05"};
+
+	sx=0;
+	sy=200;
+
+	for(int i=0;i<5;i++)
+		if(i==Mapid_now){
+			LoadMapData((char *)("File/Map"+temp[i]+".txt").c_str());
+			CatchMBData((char *)("File/Data"+temp[i]+".txt").c_str());
+		}
+
+	//------------------------------------
+	for(int j=0;j< numB_y;j++)
+		for(int i=0;i< numB_x;i++){
+			if(map[i][j]==9)//障礙物長條的
+				addMovebarrier(3,i*BarrierW,j*BarrierH,0,0,0,0);
+			if(map[i][j]==8)//障礙物小個的
+				addMovebarrier(1,i*BarrierW,j*BarrierH,0,0,0,0);
+			if(map[i][j]==7)//同上
+				addMovebarrier(2,i*BarrierW,j*BarrierH,0,0,0,0);
+			if(map[i][j]==10)//繩子短的
+			{
+				addRope(10,i*BarrierW,j*BarrierH);
+				
+			}
+			
+			if(map[i][j]==6)//繩子
+			{	
+				addRope(6,i*BarrierW,j*BarrierH);
+	
+			}
+			
+		}
+	//------------------------------------
+	SetMovebarrier_Bitmap();
+	SetRope_Bitmap();
+
+	MapW = BarrierW * numB_x;
+	MapH = BarrierH * numB_y;
+}
+void Map::CatchMBData(const char *fn){
+	ifstream ifs(fn);
+	string s;
+	int i=0;
+	while( !ifs.eof() ){
+		getline(ifs,s,':');//enemy:
+		getline(ifs,s,':');
+			enemy_id[i]=atoi(s.c_str ());
+		getline(ifs,s,',');
+			enemy_pos_x[i]=atoi(s.c_str ());
+		getline(ifs,s);
+			enemy_pos_y[i++]=atoi(s.c_str ());
+	}
+
+	ifs.close();
+}
+void Map::LoadMapData(const char *fn){
+	// 讀檔 //--------------------------------------------------------------	
+	ifstream ifs(fn);
+	int id,data[6];
+	string s;
+	int tx,ty;
+	getline(ifs,s,',');
+	numB_x = atoi(s.c_str ());
+	getline(ifs,s);
+	numB_y = atoi(s.c_str ());
+
+	for(ty=0; ty< numB_y;ty++){
+		for(tx=0; tx < numB_x-1 ;tx++){
+			getline(ifs,s,',');
+			map[tx][ty]=atoi(s.c_str ());
+		}
+		getline(ifs,s);
+		map[tx][ty]=atoi(s.c_str ());
+	}
+	getline(ifs,s);//敵人資料與地圖中間的空白
+
+	while( !ifs.eof() ){
+		getline(ifs,s,',');
+		id=atoi(s.c_str ());
+
+		if(!ifs.eof()){
+			for(int i=0;i<6;i++){
+				if(i==5)
+					getline(ifs,s);
+				else
+					if(i%2==1)
+						getline(ifs,s,',');
+					else		
+						getline(ifs,s,' ');
+				data[i]=atoi(s.c_str ());
+			}
+			addMovebarrier(id,data[0],data[1],data[2],data[3],data[4],data[5]);
+		}
+	}
+	ifs.close();
+}
+void Map::LoadBitmap(){
+
+	string temp[6]={"0","1","2","3","4","5"};		
+	for(int i=0 ; i <= 5 ; i++)
+		floor[i].LoadBitmap((char *)("Bitmaps/map/floor_"+temp[i]+".bmp").c_str(),RGB(128,0,255));
+	for(int i=0 ; i <= 3 ; i++)
+		barrier[i].LoadBitmap((char *)("Bitmaps/map/barrier_"+temp[i]+".bmp").c_str(),RGB(128,0,255));
+	for(int i=0 ; i <= 2 ; i++)
+		back_map[i].LoadBitmap("Bitmaps/map/back.bmp",RGB(0,0,0));
+	for(int i=0 ; i <= 4 ; i++)
+		Rope_map[i].LoadBitmap((char *)("Bitmaps/rope/rope"+temp[i]+".bmp").c_str(),RGB(128,0,255));
+
+	a.LoadBitmap(aaa);
+
+/*
+	floor[0].LoadBitmap("Bitmaps/map/floor_0.bmp",RGB(0,0,0));
+	barrier[0].LoadBitmap("Bitmaps/map/barrier_0.bmp",RGB(0,0,0));
+	back_map[0].LoadBitmap("Bitmaps/map/back.bmp");
+	back_map[1].LoadBitmap("Bitmaps/map/back.bmp");
+	back_map[2].LoadBitmap("Bitmaps/map/back.bmp");
+
+	Rope_map[0].LoadBitmap("Bitmaps/rope/rope0.bmp",RGB(128,0,255) );
+	Rope_map[1].LoadBitmap("Bitmaps/rope/rope1.bmp",RGB(128,0,255) );
+	Rope_map[2].LoadBitmap("Bitmaps/rope/rope2.bmp",RGB(128,0,255) );
+	Rope_map[3].LoadBitmap("Bitmaps/rope/rope3.bmp",RGB(128,0,255) );
+	Rope_map[4].LoadBitmap("Bitmaps/rope/rope4.bmp",RGB(128,0,255) );
+*/	
+}
+void Map::SetMovebarrier_Bitmap(){
+	for(int i=0;i<(int)movebarrier.size();i++){
+		if(movebarrier[i]->GetId()==0)
+			movebarrier[i]->SetBitmap(&barrier[0]);
+		else if(movebarrier[i]->GetId()==1)
+			movebarrier[i]->SetBitmap(&barrier[1]);
+		else if(movebarrier[i]->GetId()==2)
+			movebarrier[i]->SetBitmap(&barrier[2]);
+		else if(movebarrier[i]->GetId()==3)
+			movebarrier[i]->SetBitmap(&barrier[3]);
+	}
+}
+void Map::SetRope_Bitmap(){
+	for(int i=0;i<(int)rope.size();i++)
+	{
+		if(rope[i]->GetId() == 10)
+			rope[i]->SetBitmap(&Rope_map[2]);
+		else if(rope[i]->GetId() == 6)
+			rope[i]->SetBitmap(&Rope_map[4]);
+	}	
+}
+void Map::addMovebarrier(int fid,int fx,int fy,int fx_area,int fy_area,int fx_speed,int fy_speed){
+	movebarrier.push_back(new MovingBarrier(fid,fx,fy,fx_area,fy_area,fx_speed,fy_speed));
+}
+void Map::addRope(int r_id,int rx,int ry){
+	rope.push_back(new Rope(r_id,rx,ry));
+}
+void Map::onMove(){
+	for(int i=0;i < (int)movebarrier.size();i++)
+		movebarrier[i]->onMove();
+}
+void Map::onShow()
+{
+	for(int i=0;i<3;i++){
+		back_map[i].SetTopLeft(-sx/5+i*640,-sy/5-50);
+		back_map[i].ShowBitmap();
+	}
+	for(int i=0;i < (int)movebarrier.size();i++)
+		movebarrier[i]->onShow(this);
+/*
+ 	for (int i = 0; i < numB_x; i ++) {
+		for (int j = 0; j < numB_y; j++) {
+			int x = i*BarrierW - sx; // 算出第(i, j)這一格的x 螢幕座標
+			int y = j*BarrierH - sy; // 算出第(i, j)這一格的y 螢幕座標
+			switch (map[i][j]) {
+				case 0:
+					break;
+				case 1:
+					//a.SetTopLeft(x, y);
+					//a.ShowBitmap();
+					floor[2].SetTopLeft(x, y-7); // 指定第(i, j)這一格的座標	座標的扣除是用來對修改障礙物圖片的調整
+					floor[2].ShowBitmap();
+					break;
+				case 2:
+					break;
+				case 3:
+					break;
+				case 6:
+					break;
+				default:
+					ASSERT(0);
+			}
+		}
+	}
+*/
+	//-------------------------------------------
+	for(int k=1;k<=5;k++)
+		for(int i=0;i < numB_x;i++)
+			for(int j=0;j < numB_y;j++){
+				int x = i*BarrierW - sx; 
+				int y = j*BarrierH - sy;
+				if(map[i][j]==k ){
+					floor[k].SetTopLeft(x-31, y-10); 
+					floor[k].ShowBitmap();
+				}
+			}
+	//-------------------------------------------
+	for(int i=0;i < (int)rope.size();i++)
+		rope[i]->onShow(this);
+
+}
+//    //-------------------------------------------------------------------------------------------------
+bool Map::IsEmpty(int x, int y){		// (x, y) 為地圖的點座標
+	int gx = x / BarrierW;			// 轉換為格座標(整數除法)			
+	int gy = y / BarrierH;			// 轉換為格座標(整數除法)	
+	touch_gx = gx;				
+	touch_gy = gy;
+	return map[gx][gy] == 0;		// 假設0 代表空的
+}
+//-----------------------------------------------------------區分重點:IsEmpty:回傳1為空的 回傳0為有障礙
+bool Map::IsScanFloor(int x,int y)//別和IsEmpty弄混!!!				  IsScanFloor:回傳1表沒到底 回傳0為有到底
+{
+	const int SCAN_NUM = 2;			//對y加數值來偵測有無碰觸到地板 *障礙物上移動*
+
+	int gx = x / BarrierW;			// 轉換為格座標(整數除法)			
+	int gy = y / BarrierH;			// 轉換為格座標(整數除法)	
+	return map[gx ][gy] != 0;		// true 代表格座標是有東西 沒到底端;0表示空的 代表到底端
+}
+//-----------------------------------------------------------
+bool Map::IsFloor(int x,int y){
+	int gx = x / BarrierW;					
+	int gy = y / BarrierH;			
+	
+	for(int i=0;i < numB_x;i++){
+		if(map[i][gy]==1)
+			if( i*BarrierW-31 < x && x < i*BarrierW+90)
+				return true;
+		if(map[i][gy]==3)
+			if( i*BarrierW < x && x < i*BarrierW+120)
+				return true;
+		if(map[i][gy]==4)
+			if( i*BarrierW < x && x < i*BarrierW+150)
+				return true;
+		if(map[i][gy]==5)
+			if( i*BarrierW < x && x < i*BarrierW+150)
+				return true;
+	}
+	if(map[gx][gy] == 2)
+		return true;
+	else
+		return false;
+}
+//-----------------------------------------------------------
+bool Map::IsWall(int x,int y){
+	int gx = x / BarrierW;					
+	int gy = y / BarrierH;			
+	
+	for(int i=0;i < numB_x;i++)
+		for(int j=0;j < numB_y;j++){
+			if(map[i][j]==1)
+				if( i*BarrierW-31 < x && x < i*BarrierW+90)
+					if(j*BarrierH < y && y < j*BarrierH+94)
+						return true;
+			
+			if(map[i][j]==3)
+				if( i*BarrierW < x && x < i*BarrierW+120)
+					if(j*BarrierH < y && y < j*BarrierH+94)
+						return true;
+			if(map[i][j]==4)
+				if( i*BarrierW < x && x < i*BarrierW+150)
+					if(j*BarrierH < y && y < j*BarrierH+154)
+						return true;
+			if(map[i][j]==5)
+				if( i*BarrierW < x && x < i*BarrierW+150)
+					if(j*BarrierH < y && y < j*BarrierH+94)	
+						return true;
+		}
+	if(map[gx][gy] == 2)
+		return true;
+	else
+		return false;
+}
+//-----------------------------------------------------------
+bool Map::IsBarrier(int x,int y){
+	int gx = x / BarrierW;			// 轉換為格座標(整數除法)			
+	int gy = y / BarrierH;			// 轉換為格座標(整數除法)	
+
+	return map[gx][gy] == 9;
+}
+//-----------------------------------------------------------
+bool Map::IsMoveBarrier(int x1,int x2,int y){
+	for(int i=0;i<(int)movebarrier.size();i++){
+		if(x1>=movebarrier[i]->GetX() && x2<=movebarrier[i]->GetX()+110)
+			if(y==movebarrier[i]->GetY())
+				return true;
+	}
+	return false;
+}
+//    //-------------------------------------------------------------------------------------------------
+int Map::ScreenX(int x){			// x 為地圖的點座標
+	return x - sx;				// 回傳螢幕的x 點座標
+}
+int Map::ScreenY(int y) {			// y 為地圖的y 點座標
+	return y - sy;				// 回傳螢幕的點座標
+}
+void Map::SetSX(int x){	sx+=x;}
+void Map::SetSY(int y){	sy+=y;}
+int Map::GetSX(){return sx;}
+int Map::GetSY(){return sy;}
+int Map::GetMapW(){return MapW;}
+int Map::GetMapH(){return MapH;}
+int Map::GetPixW(){return PixW;}
+int Map::GetPixH(){return PixH;}
+int Map::GetBarrierH(){return BarrierH;}
+int Map::GetBarrierW(){	return BarrierW;}
+int Map::GetMapId(){ return Mapid_now; }
+void Map::SetMapId(int id){ Mapid_now = id;}
+bool Map::GetIsWin(){ return isWin; }
+void Map::SetIsWin(bool flag){ isWin=flag;}
+int Map::GetTGX(){return touch_gx;}
+int Map::GetTGY(){return touch_gy;}
+int* Map::GetEnemy_pos_x(){return enemy_pos_x;}
+int* Map::GetEnemy_pos_y(){return enemy_pos_y;}
+int* Map::GetEnemy_id(){ return enemy_id; }
+int* Map::GetEnemy_num(){ return enemy_num; }
+vector<MovingBarrier *>Map::GetMovingBarrier(){return movebarrier;}
+vector<Rope *>Map::GetRope(){ return rope;}
+//-----------------------------------------------------------------------------------------
+MovingBarrier::MovingBarrier(int fid,int fx,int fy,int fx_area,int fy_area,int fx_speed,int fy_speed){ //f_speed: 檔案的x,y斜率計算or速度 
+	id = fid;
+	x = fix_x = fx;
+	y = fix_y = fy;
+	x_area = fx_area;
+	y_area = fy_area;
+	x_speed = fx_speed;
+	y_speed = fy_speed;
+	is_end[0] =is_end[1] = true;
+}
+void MovingBarrier::SetBitmap(CMovingBitmap *Bitmap){
+	barrier = Bitmap;
+}
+void MovingBarrier::onShow(Map *m){	
+	int dy=0;
+	if(id==0) dy=7;
+	else if(id==1 || id==2) dy=2;
+	else if(id==3) dy=10;
+
+	barrier->SetTopLeft(m->ScreenX(x),m->ScreenY(y-dy));
+	barrier->ShowBitmap ();
+}
+void MovingBarrier::onMove (){
+
+	if(x<this->GetFx()+this->GetFx_area() && is_end[0]){
+		x+=x_speed;
+		if(x>=this->GetFx()+this->GetFx_area()) is_end[0]=false;
+	}
+	else if(x>this->GetFx() && !is_end[0]){
+		x-=x_speed;
+		if(x<=this->GetFx()) is_end[0]=true;
+	}
+	x_change = x - last_x;
+	last_x=x;
+	//-------------------
+	if(y<this->GetFy()+this->GetFy_area() && is_end[1]){
+		y+=y_speed;
+		if(y>=this->GetFy()+this->GetFy_area()) is_end[1]=false;
+	}
+	else if(y>this->GetFy() && !is_end[1]){
+		y-=y_speed;
+		if(y<=this->GetFy()) is_end[1]=true;
+	}
+	y_change = y - last_y;
+	last_y=y;
+}
+int MovingBarrier::GetX(){return x;}
+int MovingBarrier::GetY(){return y;}
+int MovingBarrier::GetId(){return id;}
+int MovingBarrier::GetXchange(){return x_change;}
+int MovingBarrier::GetYchange(){return y_change;}
+void MovingBarrier::SetX(int mx){
+	x = mx;
+	fix_x = mx;
+}
+void MovingBarrier::SetY(int my){
+	y = my;
+	fix_y = my;
+}
+void MovingBarrier::SetInit(int fid,int fx,int fy,int fx_area,int fy_area,int fx_speed,int fy_speed){
+	id = fid;
+	x = fix_x = fx;
+	y = fix_y = fy;
+	x_area = fx_area;
+	y_area = fy_area;
+	x_speed = fx_speed;
+	y_speed = fy_speed;
+}
+const int MovingBarrier::GetFx(){return fix_x;}//取得固定的x
+const int MovingBarrier::GetFy(){return fix_y;}//取得固定的y
+const int  MovingBarrier::GetFx_area(){return x_area;} //取得固定的xoffest
+const int  MovingBarrier::GetFy_area(){return y_area;} //取得固定的yoffest
+bool MovingBarrier::TouchObject(Enemy_basic *e)
+{
+	// 檢測擦子所構成的矩形是否碰到球
+	return HitRectangle(e->GetX1(), e->GetY1(),e->GetX2());
+}
+bool MovingBarrier::HitRectangle(int tx1, int ty1, int tx2)
+{
+	int x1 = x;				// 球的左上角x座標
+	int y1 = y;				// 球的左上角y座標
+	int x2 = x1 + barrier->Width();	// 球的右下角x座標
+	// 檢測球的矩形與參數矩形是否有交集
+	//
+	return (tx2 >= x1 && tx1 <= x2 && ty1 >= y1 );
+}
+//###################################################################################################################################
+Rope::Rope(int id,int rx,int ry){
+	r_id =id;
+	x=rx;
+	y=ry;
+}
+void Rope::LoadBitmap(){
+/*
+	rope[0].LoadBitmap("Bitmaps/rope/rope0.bmp",RGB(128,0,255) );
+	rope[1].LoadBitmap("Bitmaps/rope/rope1.bmp",RGB(128,0,255) );
+	rope[2].LoadBitmap("Bitmaps/rope/rope2.bmp",RGB(128,0,255) );
+	rope[3].LoadBitmap("Bitmaps/rope/rope3.bmp",RGB(128,0,255) );
+	rope[4].LoadBitmap("Bitmaps/rope/rope4.bmp",RGB(128,0,255) );
+*/
+}
+void Rope::SetBitmap(CMovingBitmap *Bitmap){
+	bitmap=Bitmap;
+}
+void Rope::onShow(Map *m){
+
+	bitmap->SetTopLeft(m->ScreenX(x),m->ScreenY(y));
+	bitmap->ShowBitmap();
+}
+bool Rope::isClimb(Chero *h){
+	return HitRectangle(h->GetClimb_x1(),h->GetClimb_y1(),h->GetClimb_x2(),h->GetY2());
+}
+int Rope::GetId(){return r_id;}
+int Rope::GetX1(){return x;}
+int Rope::GetX2(){return x + bitmap->Width();}
+int Rope::GetY1(){return y;}
+int Rope::GetY2(){return y + bitmap->Height();}
+bool Rope::HitRectangle(int tx1, int ty1, int tx2, int ty2){	// 是否碰到參數範圍的矩形
+	int x1 = GetX1();				// 球的左上角x座標
+	int y1 = GetY1();				// 球的左上角y座標
+	int x2 = GetX2();	// 球的右下角x座標
+	int y2 = GetY2();	// 球的右下角y座標
+	//
+	// 檢測球的矩形與參數矩形是否有交集
+	//
+	return (tx2 >= x1 && tx1 <= x2 && ty2 >= y1 && ty1 <= y2);
+
+}
+//###################################################################################################################################
+//遊戲主角
+Chero::Chero(){
+	climb_x1=50;
+	climb_x2=75;
+
+	HP_total=HP=100;
+	MP_total=200;
+	
+	MP=150;
+
+	addSkill();
+	init();
+}
+void Chero::addSkill(){
+	hero_skill.push_back (new Skill_son01);
+	hero_skill.push_back (new Skill_son02);
+	hero_skill.push_back (new Skill_son03);
+	hero_skill.push_back (new Skill_son04);
+	hero_skill.push_back (new Skill_son05);
+}
+void Chero::init(){
+	x=120;
+	y=350;
+	const int INITIAL_VELOCITY = 14;	// 初始上升速度
+	const int INITIAL_DOWNVELOCITY =1;
+	Velocity = init_Velocity = INITIAL_VELOCITY;
+	downVelocity = init_downVelocity = INITIAL_DOWNVELOCITY;
+
+	isMovingLeft = isMovingRight= isMovingUp = isMovingDown = false;
+	isMovingAttack = isMovingSkill_A = isMovingSkill_S = isMovingSkill_D = isMovingClimb = isMovingJump= false;
+	
+	
+	
+	countBeHit = superTime = 30;	//約   (X 除30) 秒	 無敵時間:受傷時有短暫的時間已免一直被怪物打
+	countHit = attackTime = 10;	//硬直時間約(X 除30) 秒
+	is_alive = true;
+	temp[0]=temp[1]=isLeft=beHit=isSkill=isClimb=false;		//isLeft:移動時如果停下來的時候要面向移動時的方向 如:像又停下來時即面向右
+	
+//攻擊的圖片時間縮改
+	for(int i=0;i< 2;i++){			//i=0為右,i=1為左
+		Attack1[i].SetDelayCount(4);//段數1 
+		Attack2[i].SetDelayCount(4);//段數2
+		Attack3[i].SetDelayCount(4);//段數3
+	}
+
+//------------------
+	Walk[0].SetDelayCount(6);
+	Walk[1].SetDelayCount(6);
+	climb_Rope.SetDelayCount(8);
+
+	hit[0]=hit[1]=hit[2]=false;
+	
+}
+void Chero::jump(Map *m){
+	const int height=84;
+	if (Velocity > 0)
+		y -= (Velocity)--;		// y軸上升(移動velocity個點)//受重力影響，下次的上升速度降低
+	else
+		onfloor(m);
+	for(;(y+height) < m->GetSY()+(m->GetPixH()/2)-20;)		//-20為螢幕的調整,當螢幕超過一半時,避免跳到障礙物後時,不會有螢幕震地(往下)的感覺 		
+		m->SetSY(-1);					//迴圈來扣減螢幕的移動
+}
+void Chero::climb(Map *m,bool *Climb_down){
+	int i;
+	const int STEP_SIZE=4;
+	vector<Rope *> rope=m->GetRope();
+	for(i=0;i<(int)rope.size();i++){
+		if( rope[i]->isClimb(this) && isClimb ){
+			SetX1( rope[i]->GetX1()-53-x );
+			break;
+		}	
+	}
+	if(isMovingUp && (GetClimb_y1()-STEP_SIZE)>rope[i]->GetY1())
+		y-=STEP_SIZE;
+	if(isMovingDown)
+		y+=STEP_SIZE;
+	
+	if(isMovingUp || isMovingDown)
+		climb_Rope.OnMove();
+
+	if( GetY2() > rope[i]->GetY2()+20 )
+		*Climb_down=true;
+
+	//----------------------------------------------------------------
+	for(;GetY2() > m->GetSY()+(m->GetPixH()/2) && GetY2() < m->GetMapH()-(m->GetPixH()/2)+70;)//+70 讓主角銀幕位置至於較中間點
+		m->SetSY(1);
+	for(;GetY2() < m->GetSY()+(m->GetPixH()/2)-20;)
+		m->SetSY(-1);
+}
+void Chero::onfloor(Map *m){
+	const int Bh_height = 30;//Bh為障礙物的高度
+	const int foot1=62;	//58
+	const int foot2=66;	//71
+	const int height=84;
+	const int center=(foot1+foot2)/2;
+	vector<MovingBarrier *>barrier=m->GetMovingBarrier();
+
+	Velocity = 0;	//在下降階段不能跳
+	
+	int Bh=0;
+	int count_floor=0;	//初始劃離地高度
+	int number;//用來記住踩在哪個movebarrier上
+	//------------------------------------------------------------------------
+	if( isMovingDown && IsTouchBarrier(barrier,count_floor,&number))
+		y+=1;
+	SetMovingDown(false);
+	for(count_floor=0 ; ; count_floor++)	
+		if( !m->IsFloor( (x+foot1),(y+height)+Bh+count_floor) && !m->IsFloor( (x+foot2),(y+height)+Bh+count_floor) && !IsTouchBarrier(barrier,count_floor,&number) && GetY2()+count_floor<=m->GetMapH()+100 ){}
+		else break;
+	//------------------------------------------------------------------------
+	if (count_floor >= downVelocity)
+		y += (downVelocity)++;		// y軸下降(移動velocity個點)// 受重力影響，下次的下降速度增加
+	else{
+		y +=count_floor;	//一次剛好到地
+		
+		SetMovingJump(false);
+		Velocity = init_Velocity;		// 重設上升初始速度
+		downVelocity = init_downVelocity;	// 重設下降初始速度	
+	}
+	//------------------------------------------------------------------------
+	int dx,dy,adjust;
+	if( IsTouchBarrier(barrier,0,&number) ){
+		dx= barrier[number]->GetXchange();
+		dy= barrier[number]->GetYchange();
+		if(dy>=0)
+			adjust=0;
+		else
+			adjust=dy;
+	}
+
+	if( IsTouchBarrier(barrier,adjust,&number) ){
+		x+=dx;
+		y+=dy;
+	}
+	//------------------------------------------------------------------------
+	for(;(y+height) > m->GetSY()+(m->GetPixH()/2) && y+height < m->GetMapH()-(m->GetPixH()/2)+70;)//+70 讓主角銀幕位置至於較中間點
+		m->SetSY(1);
+	for(;(y+height) < m->GetSY()+(m->GetPixH()/2)-20;)
+		m->SetSY(-1);
+}
+bool Chero::IsTouchBarrier(vector<MovingBarrier *> b,int count,int *number){
+	const int foot1=62,foot2=66;
+	const int height=84;
+	for(int i=0;i<(int)b.size();i++){
+		int dx=0,id=b[i]->GetId();
+		
+		if(id==0) dx=110;
+		else if(id==1 || id==2)dx=60;
+		else if(id==3) dx=154;
+		if(x+foot1 >= b[i]->GetX() && x+foot2 <= b[i]->GetX()+dx){ 
+			if( y+height+count == b[i]->GetY() ){
+				*number=i;
+				return true;
+			}
+			if( y+height+count+b[i]->GetYchange() == b[i]->GetY() ){
+				*number=i;
+				return true;
+			}
+		}
+	}
+	return false;
+
+}
+void Chero::LoadBitmap(){
+
+	string temp[5]={"0","1","2","3","4"};
+	string rl[2]={"r","l"};
+	
+	for(int j=0 ; j <= 1 ; j++){
+		
+		Jump[j].LoadBitmap( (char *)("Bitmaps/hero2/jump_"+rl[j]+".bmp").c_str(),RGB(128,0,255) );
+		
+		for(int i=0 ; i <= 4 ; i++){
+			if(i<4){
+				Alert[j].AddBitmap( (char *)("Bitmaps/hero2/alert_"+rl[j]+temp[i]+".bmp").c_str(),RGB(128,0,255) );
+				Walk[j].AddBitmap( (char *)("Bitmaps/hero2/walk_"+rl[j]+temp[i]+".bmp").c_str(),RGB(128,0,255) );
+				Attack1[j].AddBitmap( (char *)("Bitmaps/hero2/hit_"+rl[j]+"1"+temp[i]+".bmp").c_str(), RGB(128,0,255));
+				Attack2[j].AddBitmap( (char *)("Bitmaps/hero2/hit_"+rl[j]+"2"+temp[i]+".bmp").c_str(), RGB(128,0,255));
+				Attack3[j].AddBitmap( (char *)("Bitmaps/hero2/hit_"+rl[j]+"3"+temp[i]+".bmp").c_str(), RGB(128,0,255));
+				if(j==0)
+					hp[i].LoadBitmap( (char *)("Bitmaps/blood/blood"+temp[i]+".bmp").c_str(),RGB(128,0,255));
+			}
+			else{
+				Alert[j].AddBitmap( (char *)("Bitmaps/hero2/alert_"+rl[j]+temp[i]+".bmp").c_str(),RGB(128,0,255) );
+				Attack3[j].AddBitmap( (char *)("Bitmaps/hero2/hit_"+rl[j]+"3"+temp[i]+".bmp").c_str(), RGB(128,0,255));
+			}
+		}
+	}
+	climb_Rope.AddBitmap("Bitmaps/hero2/Rope_0.bmp",RGB(128,0,255));
+	climb_Rope.AddBitmap("Bitmaps/hero2/Rope_1.bmp",RGB(128,0,255));
+	Hit.LoadBitmap("Bitmaps/hero2/hit_1.bmp",RGB(128,0,255));
+
+
+	for(int i=0; i < (int)hero_skill.size() ;i++)
+		hero_skill[i]->LoadBitmap();
+	
+}
+void Chero::LoadAudio()
+{
+	CAudio::Instance()->Load(AUDIO_Jump,  "sounds\\mario_wav\\大隻的瑪莉~跳~.wav");	
+}
+void Chero::AttackEnemy(Map *m){ //攻擊敵人
+//    //--------------------------------------------------------------	
+	if(Attack1[0].IsFinalBitmap())			//攻擊動作完結，才能再打
+		Attack1[0].Reset();
+	else if(Attack1[1].IsFinalBitmap())
+		Attack1[1].Reset();
+	if(Attack2[0].IsFinalBitmap())
+		Attack2[0].Reset();
+	else if(Attack2[1].IsFinalBitmap())
+		Attack2[1].Reset();
+	if(Attack3[0].IsFinalBitmap())
+		Attack3[0].Reset();
+	else if(Attack3[1].IsFinalBitmap())
+		Attack3[1].Reset();
+	
+
+
+	if( Attack1[0].IsFinalBitmap()||Attack1[1].IsFinalBitmap() ) 
+		hit[0]=false;
+	if( Attack2[0].IsFinalBitmap()||Attack2[1].IsFinalBitmap() ) 
+		hit[1]=false;
+	if( Attack3[0].IsFinalBitmap()||Attack3[1].IsFinalBitmap() ) 
+		hit[2]=false;	
+//    //--------------------------------------------------------------	
+	if( IsSkill() ){
+		for(int i=0;i<2;i++){
+			Attack1[i].Reset();
+			Attack2[i].Reset();
+			Attack3[i].Reset();
+			hit[i]=false;
+		}
+		hit[2]=false;
+		
+		countHit = attackTime;
+		SetMovingAttack(false);
+	}
+//    //--------------------------------------------------------------	
+	if(countHit < attackTime && hit[2]==false){
+		countHit--;
+		SetMovingAttack(false);
+	}
+	if(countHit==0)
+		countHit = attackTime;
+	if(isSkill){}
+	else if( isMovingAttack && hit[0]==false && hit[1]==false && hit[2]==false){
+		hit[0]=true;
+		SetMovingAttack(false);			
+	}
+	else if(hit[0]){	//攻擊判斷,攻擊中，圖片才動
+		Attack1[0].OnMove();
+		Attack1[1].OnMove();
+		
+		if(isMovingAttack){
+			hit[1]=true;
+		}
+		SetMovingAttack(false);
+	}
+	else if(hit[1]){	//攻擊判斷,攻擊中，圖片才動
+		Attack2[0].OnMove();
+		Attack2[1].OnMove();
+		
+		if(isMovingAttack){
+			countHit--;
+			hit[2]=true;
+		}
+		SetMovingAttack(false);
+	}
+	else if(hit[2]){	//攻擊判斷,攻擊中，圖片才動
+		Attack3[0].OnMove();
+		Attack3[1].OnMove();
+	}
+//    //--------------------------------------------------------------	
+	int number;
+	vector<MovingBarrier *>barrier=m->GetMovingBarrier();
+	if(!isSkill){
+		if(isMovingSkill_A && !hero_skill[3]->IsRun() && MP>=40){//用來判斷是否放技能
+			hero_skill[3]->SetRun(true);
+			MP-=40;
+			if(MP<=0) MP=1;
+		}
+		if(m->IsFloor(x+75,GetY2()) || IsTouchBarrier(barrier,0,&number))
+			if(isMovingSkill_S && !hero_skill[4]->IsRun() && MP>=50){
+				hero_skill[4]->SetRun(true);
+				MP-=50;
+				if(MP<=0) MP=1;
+			}
+	}
+	SetMovingSkill_A(false);
+	SetMovingSkill_S(false);
+	
+//    //--------------------------------------------------------------	
+}
+void Chero::onMove(Map *m,vector<Enemy_basic *> enemy){ // 注意：這是hero，不是map class
+	const int STEP_SIZE = 7;
+	const int height = 84 - 1;
+	const int right_x=90;
+	const int left_x=40;
+	const int center=(71+84)/2;
+	static int temp=0;
+	
+	Alert[0].OnMove();
+	Alert[1].OnMove();
+
+	if( IsAlive() ){
+		Skill_now();
+//被攻擊//--------------------------------------------------------------
+		for(int i=0;i<(int)enemy.size();i++)	//用迴圈來讀同一種物件裡每一個敵人的記憶體位置 +k指向下一是個連續位置
+			if( enemy[i]->IsAlive() && !isSkill)
+				beHit_by_Enemy(enemy[i]);
+		if(beHit)
+			countBeHit--;
+		if(countBeHit==0 && HP>0){
+			beHit=false;	//表示無敵時間已結束
+			countBeHit=superTime;	//回到初始值
+		}
+		if(HP<=0 || GetY2()>=m->GetMapH()+100 ) 
+			SetIsAlive(false);	//死亡
+// 攻擊 //--------------------------------------------------------------
+		AttackEnemy(m);
+		if(!isLeft &&  m->IsEmpty((x+right_x),(y+height)) && (x+right_x) < m->GetMapW() ){	
+			if(IsAttack()==2 && Attack2[0].GetCurrentBitmapNumber()==1) x+=15/4;//突刺移動(右)
+			if(IsAttack()==2 && Attack2[0].GetCurrentBitmapNumber()==2) x+=25/4;
+			if(IsAttack()==3 && Attack3[0].GetCurrentBitmapNumber()==2) x+=16/4;//轉身砍移動
+			if(IsAttack()==3 && Attack3[0].GetCurrentBitmapNumber()==3) x+=16/4;
+		}
+		else if(isLeft && m->IsEmpty((x+left_x),(y+height)) && (x+left_x) > 0 ){		
+			if(IsAttack()==2 && Attack2[1].GetCurrentBitmapNumber()==1) x-=15/4;//突刺移動(左)
+			if(IsAttack()==2 && Attack2[1].GetCurrentBitmapNumber()==2) x-=25/4;		
+			if(IsAttack()==3 && Attack3[1].GetCurrentBitmapNumber()==2) x-=16/4;//轉身砍移動
+			if(IsAttack()==3 && Attack3[1].GetCurrentBitmapNumber()==3) x-=16/4;
+		}
+		//集MP-------------------------------------------
+		for(int j=0;j<(int)enemy.size();j++)
+			for(int i=0;i<(int)hero_skill.size();i++)
+				if(enemy[j]->beHit_by_Hero(this) && enemy[j]->IsAlive())
+					if(MP<=MP_total){
+						temp+=1;
+						MP+=temp/5;
+						if(temp >5) temp=0;
+					}
+// 移動 //--------------------------------------------------------------
+		last_x = x;			//取上一座標，判斷座標(左右)貼圖
+
+		//右移動
+		if( (hit[0] || hit[1] || hit[2] || isSkill) && isMovingJump==false && m->IsEmpty((x+right_x),(y+height)) ){}	//地面攻擊時，不可往右移動	不會出現(攻擊圖片狀態滑動)			
+		else if (isMovingRight && (x+right_x)< m->GetMapW() && !m->IsWall( (x+right_x),(y+height)) ){		//按→ (右邊沒障礙時)
+			Walk[0].OnMove();
+			x += STEP_SIZE;
+		}
+		//左移動
+		if( (hit[0] || hit[1] || hit[2] || isSkill) && isMovingJump==false){}	//地面攻擊時，不可往右移動	不會出現(攻擊圖片狀態滑動)			
+		else if (isMovingLeft && (x+left_x) > 0 && !m->IsWall( (x+left_x),(y+height)) ){		//按← (左邊沒障礙時)
+			Walk[1].OnMove();
+			x -= STEP_SIZE;
+		}
+		
+// 跳耀 //--------------------------------------------------------------
+		last_y=y;		//取上一座標，判斷座標(跳)貼圖
+		if(isMovingClimb && !isClimb){
+			isClimb=true;
+			SetMovingClimb(false);
+			SetMovingJump(false);
+		}
+		bool Climb_down=false;
+		if(isClimb){
+			climb(m,&Climb_down);
+			if(isMovingJump || Climb_down){
+				isClimb=false;
+				Velocity = init_Velocity;
+				downVelocity = init_downVelocity;
+			}
+		}
+		if (isMovingJump)				//跳耀
+			jump(m);
+		else if( !isClimb )					//踩地
+			onfloor(m);
+		
+// 招示 // -------------------------------------------------------------
+		for(int i=0;i < (int)hero_skill.size();i++)
+			hero_skill[i]->onMove(this);
+// 調整 // -------------------------------------------------------------
+// 銀幕 //
+
+		for(;(x+center) > m->GetSX()+(m->GetPixW()/2) && (x+center) < m->GetMapW()-(m->GetPixW()/2);)	//螢幕跟著調整	
+			m->SetSX(1);
+		for(;(x+center) < m->GetSX()+(m->GetPixW()/2) && (x+center) > (m->GetPixW()/2);)		
+			m->SetSX(-1);
+	}
+	else{	//死掉後 設定復活
+		HP=HP_total;
+		SetIsAlive(true);
+	}
+		
+}
+void Chero::onShow(Map *m) // 注意：這是hero，不是map class
+{
+	int number=0;
+// 血量 //--------------------------------------------------------------
+	int dx=5,dy=20;
+	hp[0].SetTopLeft(dx,dy);
+	hp[1].SetTopLeft(dx,dy+3);
+	hp[2].SetTopLeft(dx,dy+17);
+	hp[3].SetTopLeft(dx,dy);
+	hp[0].ShowBitmap();
+	hp[1].ShowBitmap((double)HP/HP_total,1.0);
+	hp[2].ShowBitmap((double)MP/MP_total,1.0);
+	hp[3].ShowBitmap();
+	
+// 掛掉 //--------------------------------------------------------------
+	if( !IsAlive()){} //掛掉，人物不印出
+// 被打 //--------------------------------------------------------------
+	else if(beHit && countBeHit%4 == 0){}//countBeHit %4 ==0 --->%4(閃爍速度，越大越慢) countBeHit扣減時取能使餘數為0的值並在那個時候閃爍圖片一次	
+// 技能 //--------------------------------------------------------------
+	else if(hero_skill[3]->IsRun()){}
+	else if(hero_skill[4]->IsRun()){}
+// 攻擊 //--------------------------------------------------------------
+	else if(hit[0]){
+		if(isLeft){
+			Attack1[1].SetTopLeft(m->ScreenX(x), m->ScreenY(y));
+			Attack1[1].OnShow();
+		}
+		else{
+			Attack1[0].SetTopLeft(m->ScreenX(x), m->ScreenY(y));
+			Attack1[0].OnShow();
+		}
+		//hero_skill[0]->onShow(this,m);
+	}
+	else if(hit[1]){
+		if(isLeft){
+			Attack2[1].SetTopLeft(m->ScreenX(x), m->ScreenY(y));
+			Attack2[1].OnShow();
+		}
+		else{
+			Attack2[0].SetTopLeft(m->ScreenX(x), m->ScreenY(y));
+			Attack2[0].OnShow();
+		}
+		//hero_skill[1]->onShow(this,m);
+	}
+	else if(hit[2]){
+		if(isLeft){
+			Attack3[1].SetTopLeft(m->ScreenX(x), m->ScreenY(y));
+			Attack3[1].OnShow();
+		}
+		else{
+			Attack3[0].SetTopLeft(m->ScreenX(x), m->ScreenY(y));
+			Attack3[0].OnShow();
+		}
+		//hero_skill[2]->onShow(this,m);
+	}
+// 爬繩 //--------------------------------------------------------------
+	else if(isClimb){
+		climb_Rope.SetTopLeft(m->ScreenX(x), m->ScreenY(y));
+		climb_Rope.OnShow();
+	}
+// 跳耀 //--------------------------------------------------------------
+	else if(!(IsTouchBarrier(m->GetMovingBarrier(),0,&number)) && !isLeft && last_y!=y && x>=last_x){	//同時按跳和角色位在右邊(不在左邊)
+		Jump[0].SetTopLeft(m->ScreenX(x), m->ScreenY(y));
+		Jump[0].ShowBitmap();
+	}
+	else if(!(IsTouchBarrier(m->GetMovingBarrier(),0,&number)) &&  isLeft && last_y!=y && x<=last_x){	//是否面向左邊同時判斷有無按跳
+		Jump[1].SetTopLeft(m->ScreenX(x), m->ScreenY(y));
+		Jump[1].ShowBitmap();
+	}
+// 移動 //--------------------------------------------------------------
+	else if(x>last_x && isMovingRight){											//在右邊移動
+		Walk[0].SetTopLeft(m->ScreenX(x), m->ScreenY(y)); 
+		Walk[0].OnShow();
+		isLeft=false;
+	}
+	else if(x<last_x && isMovingLeft){											//在左邊移動
+		Walk[1].SetTopLeft(m->ScreenX(x), m->ScreenY(y)); 
+		Walk[1].OnShow();
+		isLeft=true;
+	}
+// 原地 //--------------------------------------------------------------
+	else if(!isLeft){								//面向右邊 座標沒移動
+		Alert[0].SetTopLeft(m->ScreenX(x), m->ScreenY(y)); 
+		Alert[0].OnShow();
+	}
+	else if( isLeft){								//面向左邊 座標沒移動
+		Alert[1].SetTopLeft(m->ScreenX(x), m->ScreenY(y)); 
+		Alert[1].OnShow();
+	}
+	for(int i=0;i<(int)hero_skill.size();i++)
+		hero_skill[i]->onShow(this,m);
+	
+}
+void Chero::SetMovingDown(bool flag){isMovingDown = flag;}
+void Chero::SetMovingLeft(bool flag){isMovingLeft = flag;}
+void Chero::SetMovingRight(bool flag){isMovingRight = flag;}
+void Chero::SetMovingUp(bool flag){isMovingUp = flag;}
+void Chero::SetMovingAttack(bool flag){isMovingAttack = flag;}
+void Chero::SetMovingSkill_A(bool flag){isMovingSkill_A = flag;}
+void Chero::SetMovingSkill_S(bool flag){isMovingSkill_S = flag;}
+void Chero::SetMovingSkill_D(bool flag){isMovingSkill_D = flag;}
+void Chero::SetMovingClimb(bool flag){isMovingClimb = flag;}
+void Chero::SetMovingJump(bool flag)
+{
+	isMovingJump = flag;
+	if(isMovingJump)
+		CAudio::Instance()->Play(AUDIO_Jump, false);
+	else
+		CAudio::Instance()->Stop(AUDIO_Jump);
+}
+bool Chero::IsLeft(){return isLeft;}
+bool Chero::IsClimb(){ return isClimb;}
+int Chero::IsAttack(){
+	if(hit[0])
+		return 1;
+	else if(hit[1])
+		return 2;
+	else if(hit[2])
+		return 3;
+	return 0;
+}
+void Chero::Skill_now(){
+	if(hero_skill[3]->IsRun()||hero_skill[4]->IsRun())
+		isSkill=true;
+	else
+		isSkill=false;
+}
+bool Chero::IsAlive(){return is_alive;}
+bool Chero::IsSkill(){return isSkill;}
+void Chero::SetIsAlive(bool flag){is_alive = flag;}
+int Chero::GetX1(){return x;}
+int Chero::GetY1(){return y;}
+int Chero::GetX2(){return x + Attack1[0].Width();}
+int Chero::GetY2(){return y + 84;}
+int Chero::GetMP(){return MP;}
+int Chero::GetClimb_x1(){ return x+climb_x1;}
+int Chero::GetClimb_x2(){ return x+climb_x2;}
+int Chero::GetClimb_y1(){ return y+15;}
+bool Chero::GetIsMovingUp(){ return isMovingUp;}
+void Chero::SetX1(int move){ x+=move; }
+vector<Skill_basic *> Chero::GetSkill(){return hero_skill;}
+CAnimation Chero::GetHitAnimation(){
+//------------------------------------第一段攻擊	
+	if(!isLeft && hit[0])
+		return Attack1[0];
+	else if(hit[0])
+		return Attack1[1];
+//------------------------------------第二段攻擊	
+	else if(!isLeft && hit[1])
+		return Attack2[0];
+	else if(hit[1])
+		return Attack2[1];
+//------------------------------------第三段攻擊
+	else if(!isLeft && hit[2])
+		return Attack3[0];
+	else 
+		return Attack3[1];	
+}
+void Chero::beHit_by_Enemy(Enemy_basic *e){
+	bool condition=HitRectangle(e->GetX1(), e->GetY1(),e->GetX2(), e->GetY2());	
+		//碰到怪
+	int hit_HP=0;
+
+	if(countBeHit == superTime && !beHit){
+		if(condition && e->GetEnemyId()!=4)
+			hit_HP=-1;
+		else if(e->isHitHero(this) && e->GetEnemyId()==2)
+			hit_HP=-5;
+		else if(e->isHitHero(this) && e->GetEnemyId()==3)
+			hit_HP=-5;
+		else if(condition && e->GetEnemyId()==4)
+			hit_HP=-10;
+
+		if(hit_HP!=0){
+			HP += hit_HP;
+			beHit=true;
+			countBeHit--;
+		}
+	}
+}
+bool Chero::HitRectangle(int tx1, int ty1, int tx2, int ty2){	// 是否碰到參數範圍的矩形
+	int x1 = x + 60;				// 球的左上角x座標
+	int y1 = y + 50;				// 球的左上角y座標
+	int x2 = x + 70;	// 球的右下角x座標
+	int y2 = y + 80;	// 球的右下角y座標
+	//
+	// 檢測球的矩形與參數矩形是否有交集
+	//
+	return (tx2 >= x1 && tx1 <= x2 && ty2 >= y1 && ty1 <= y2);
+}
+//###################################################################################################################################
+//技能
+Skill_basic::Skill_basic(){
+	isRun=false;
+}
+int Skill_basic::GetX1(){ return x; }
+int Skill_basic::GetY1(){ return y; }
+void Skill_basic::SetX1(int sx){x = sx;}
+void Skill_basic::SetY1(int sy){y = sy;}
+bool Skill_basic::IsRun(){return isRun;}
+void Skill_basic::SetRun(bool flag){isRun=flag;}
+
+bool Skill_basic::isHitRectangle(int tx1, int ty1, int tx2, int ty2){	
+	int x1 = GetX1();	// 球的左上角x座標
+	int y1 = GetY1();	// 球的左上角y座標
+	int x2 = GetX2();	// 球的右下角x座標
+	int y2 = GetY2();	// 球的右下角y座標
+
+	return (tx2 >= x1 && tx1 <= x2 && ty2 >= y1 && ty1 <= y2);
+}
+//--------------------------------------------------------------------------
+Skill_son01::Skill_son01(){}
+void Skill_son01::LoadBitmap(){
+	hit[0].LoadBitmap("Bitmaps/hero2/hit_0.bmp",RGB(128,0,255));
+	hit[1].LoadBitmap("Bitmaps/hero2/hit_1.bmp",RGB(128,0,255));	
+}
+void Skill_son01::onMove(Chero *h){
+	if(!h->IsLeft() )
+		SetX1(h->GetX1()+45);
+	else if(h->IsLeft() )
+		SetX1(h->GetX1()-10);
+	SetY1(h->GetY1()+38);
+}
+void Skill_son01::onShow(Chero *h,Map *m){
+	if(h->GetHitAnimation().GetCurrentBitmapNumber()==2 && h->IsAttack()==1 && !h->IsLeft() ){
+		hit[0].SetTopLeft(m->ScreenX(h->GetX1()+45), m->ScreenY(h->GetY1()+38) );
+		hit[0].ShowBitmap();
+	}
+	else if(h->GetHitAnimation().GetCurrentBitmapNumber()==2 && h->IsAttack()==1 && h->IsLeft() ){
+		hit[1].SetTopLeft(m->ScreenX(h->GetX1()-10), m->ScreenY(h->GetY1()+38));
+		hit[1].ShowBitmap();
+	}
+}
+int Skill_son01::GetX2(){ return x+hit[0].Width(); }
+int Skill_son01::GetY2(){ return y+hit[0].Height(); }
+//--------------------------------------------------------------------------
+Skill_son02::Skill_son02(){}
+void Skill_son02::LoadBitmap(){
+	hit[0].LoadBitmap("Bitmaps/hero2/hit_2.bmp",RGB(128,0,255));
+	hit[1].LoadBitmap("Bitmaps/hero2/hit_3.bmp",RGB(128,0,255));
+}
+void Skill_son02::onMove(Chero *h){
+	if(!h->IsLeft() )
+		SetX1(h->GetX1()+98);
+	else if(h->IsLeft() )
+		SetX1(h->GetX1()-18);
+	SetY1(h->GetY1()+54);
+}
+void Skill_son02::onShow(Chero *h,Map *m){
+	if( (h->GetHitAnimation().GetCurrentBitmapNumber()==2 || h->GetHitAnimation().GetCurrentBitmapNumber()==3) ){
+		if( h->IsAttack()==2 && !h->IsLeft() ){
+			hit[0].SetTopLeft(m->ScreenX(h->GetX1()+98), m->ScreenY(h->GetY1()+54) );
+			hit[0].ShowBitmap();
+		}
+		else if (h->IsAttack()==2 && h->IsLeft() ){
+			hit[1].SetTopLeft(m->ScreenX(h->GetX1()-18), m->ScreenY(h->GetY1()+54) );
+			hit[1].ShowBitmap();
+		}
+	}
+}
+int Skill_son02::GetX2(){ return x+hit[0].Width(); }
+int Skill_son02::GetY2(){ return y+hit[0].Height(); }
+//--------------------------------------------------------------------------
+Skill_son03::Skill_son03(){ }
+void Skill_son03::LoadBitmap(){
+	hit[0].LoadBitmap("Bitmaps/hero2/hit_0.bmp",RGB(128,0,255));
+	hit[1].LoadBitmap("Bitmaps/hero2/hit_1.bmp",RGB(128,0,255));	
+}
+void Skill_son03::onMove(Chero *h){
+	if(!h->IsLeft() )
+		SetX1(h->GetX1()+50);
+	else if(h->IsLeft() )
+		SetX1(h->GetX1()-13);
+	SetY1(h->GetY1()+38);
+}
+void Skill_son03::onShow(Chero *h,Map *m){
+	if(h->GetHitAnimation().GetCurrentBitmapNumber()==3 && h->IsAttack()==3 && !h->IsLeft() ){
+		hit[0].SetTopLeft(m->ScreenX(h->GetX1()+50), m->ScreenY(h->GetY1()+38) );
+		hit[0].ShowBitmap();
+	}
+	else if(h->GetHitAnimation().GetCurrentBitmapNumber()==3 && h->IsAttack()==3 && h->IsLeft() ){
+		hit[1].SetTopLeft(m->ScreenX(h->GetX1()-13), m->ScreenY(h->GetY1()+38));
+		hit[1].ShowBitmap();
+	}
+}
+int Skill_son03::GetX2(){ return x+hit[0].Width(); }
+int Skill_son03::GetY2(){ return y+hit[0].Height(); }
+//--------------------------------------------------------------------------
+//--------------------------------------------------------------------------
+Skill_son04::Skill_son04(){
+	hit[0].SetDelayCount(2);
+	hit[1].SetDelayCount(2);
+	menu.SetDelayCount(5);
+}
+void Skill_son04::init(Chero *h,Map *m){
+	if( !h->IsAlive() || m->GetIsWin() ){
+		for(int i=0;i<2;i++)
+			hit[i].Reset();
+		isRun=false;
+	}
+}
+void Skill_son04::LoadBitmap(){
+	string temp[11]={"0","1","2","3","4","5","6","7","8","9","10"};
+	string rl[2]={"r","l"};
+	for(int j=0;j<2;j++){
+		for(int i=0;i<25;i++){
+			if(i<11)	
+				hit[j].AddBitmap( (char *)("Bitmaps/hero2/skill01/effect_"+rl[j]+temp[i]+".bmp").c_str(), RGB(255,214,8));
+			else if(i<20)
+				hit[j].AddBitmap( (char *)("Bitmaps/hero2/skill01/effect_"+rl[j]+temp[1]+temp[i-10]+".bmp").c_str(), RGB(255,214,8));
+			else 
+				hit[j].AddBitmap( (char *)("Bitmaps/hero2/skill01/effect_"+rl[j]+temp[2]+temp[i-20]+".bmp").c_str(), RGB(255,214,8));
+		}
+		for(int i=0;i<10;i++)
+			hit[j].AddBitmap( (char *)("Bitmaps/hero2/skill01/special_"+rl[j]+temp[i]+".bmp").c_str(), RGB(255,214,8));
+	}
+	menu.AddBitmap("Bitmaps/hero2/skill01/menu_0.bmp",RGB(128,0,255));
+	menu.AddBitmap("Bitmaps/hero2/skill01/menu_1.bmp",RGB(128,0,255));
+	menu.AddBitmap("Bitmaps/hero2/skill01/menu_2.bmp",RGB(128,0,255));
+}
+void Skill_son04::onMove(Chero *h){
+	if(hit[0].IsFinalBitmap() ){
+		for(int i=0;i<2;i++)
+			hit[i].Reset();
+		isRun=false;
+	}
+
+	if(isRun)
+		for(int i=0;i<2;i++)
+			hit[i].OnMove();
+
+	if(hit[0].GetCurrentBitmapNumber()<27){
+		if(!h->IsLeft() )
+			SetX1(h->GetX1()-30);
+		else if(h->IsLeft() )
+			SetX1(h->GetX1()-32);
+	}
+	SetY1(h->GetY1()-37);
+	
+	
+	for(int i=0;i<2;i++){
+		if(hit[i].GetCurrentBitmapNumber()>=10 && hit[i].GetCurrentBitmapNumber()<=24)
+			hit[i].SetDelayCount(1);
+		else
+			hit[i].SetDelayCount(2);
+	}
+
+	if(hit[0].GetCurrentBitmapNumber()==27){
+		if(!h->IsLeft())
+			h->SetX1(40);	//	80/2
+		else
+			h->SetX1(-33);//33/2
+	}
+	/*
+	if(hit[0].GetCurrentBitmapNumber()>=27 && hit[0].GetCurrentBitmapNumber()<32){
+		if(!h->IsLeft()){
+			//x+=5;
+			//h->SetX1(5);
+		}
+		else{
+			x-=5;
+			h->SetX1(-5);
+		}
+	}
+	*/
+	if(menu.GetCurrentBitmapNumber()==0 && h->GetMP()>=40 && !h->IsSkill())
+		menu.OnMove();
+	else if(menu.GetCurrentBitmapNumber()!=0 && h->IsSkill()){
+		menu.OnMove();
+		if(!isRun)
+			menu.Reset();
+	}
+}
+void Skill_son04::onShow(Chero *h,Map *m){
+	if(isRun){
+		if(!h->IsLeft()){	
+			hit[0].SetTopLeft( m->ScreenX(x),m->ScreenY(y));
+			hit[0].OnShow();
+		}
+		else{
+			hit[1].SetTopLeft( m->ScreenX(x),m->ScreenY(y));
+			hit[1].OnShow();
+		}
+	}
+	menu.SetTopLeft(10,50);
+	menu.OnShow();
+
+}
+void Skill_son04::HitEnemy(Enemy_basic *e){
+	int *num = e->hit_skill_num();
+	int now_num=hit[0].GetCurrentBitmapNumber();
+	
+	if( e->HitRectangle(GetX1(),GetY1(),GetX2(),GetY2()) ){
+		if(num[0] != now_num && (now_num>10 && now_num<23) )
+			e->HP_reduce(15);
+		if(num[0] != now_num && (now_num>27 && now_num<32) )
+			e->HP_reduce(35);
+		if(now_num>10)
+			e->SetbeHit(true);
+	}
+	num[0]=now_num;
+	e->Set_hit_skill_num(num);
+}
+int Skill_son04::GetX2(){ return x+hit[0].Width(); }
+int Skill_son04::GetY2(){ return y+hit[0].Height(); }
+//--------------------------------------------------------------------------
+//--------------------------------------------------------------------------
+Skill_son05::Skill_son05(){ 
+	for(int i=0;i<2;i++){
+		hit[i].SetDelayCount(3);
+		bomb0[i].SetDelayCount(5);
+		bomb1[i].SetDelayCount(5);
+		bomb2[i].SetDelayCount(5);
+	}
+	menu.SetDelayCount(5);
+}
+void Skill_son05::init(Chero *h,Map *m){
+	if( !h->IsAlive() || m->GetIsWin() ){
+		for(int i=0;i<2;i++){
+			hit[i].Reset();
+			bomb0[i].Reset();
+			bomb1[i].Reset();
+			bomb2[i].Reset();
+		}
+		isRun=false;
+	}
+}
+void Skill_son05::LoadBitmap(){
+	string temp[13]={"0","1","2","3","4","5","6","7","8","9","10","11","12"};
+	string rl[2]={"r","l"};
+	for(int j=0;j<2;j++){
+		for(int i=0;i<13;i++)
+			hit[j].AddBitmap( (char *)("Bitmaps/hero2/skill02/effect_"+rl[j]+temp[i]+".bmp").c_str(), RGB(96,96,96));
+		for(int i=0;i<5;i++){
+			bomb0[j].AddBitmap( (char *)("Bitmaps/hero2/skill02/hit0_"+rl[j]+temp[i]+".bmp").c_str(), RGB(96,96,96));
+			bomb1[j].AddBitmap( (char *)("Bitmaps/hero2/skill02/hit1_"+rl[j]+temp[i]+".bmp").c_str(), RGB(96,96,96));
+			bomb2[j].AddBitmap( (char *)("Bitmaps/hero2/skill02/hit2_"+rl[j]+temp[i]+".bmp").c_str(), RGB(96,96,96));
+		}
+	}
+	menu.AddBitmap("Bitmaps/hero2/skill02/menu_0.bmp",RGB(128,0,255));
+	menu.AddBitmap("Bitmaps/hero2/skill02/menu_1.bmp",RGB(128,0,255));
+	menu.AddBitmap("Bitmaps/hero2/skill02/menu_2.bmp",RGB(128,0,255));
+}
+void Skill_son05::HitEnemy(Enemy_basic *e){
+	int *num = e->hit_skill_num();
+	int now_num = bomb0[0].GetCurrentBitmapNumber();
+	
+	int _bx,_by;
+	for(int i=0;i<2;i++){
+		_by=y+by;
+
+		_bx=x+bx0[i];
+		if(e->HitRectangle(_bx,_by,_bx+bomb0[i].Width(),_by+bomb0[i].Height()) ){
+			if(num[1] != now_num && now_num!=3 && now_num!=4)	e->HP_reduce(40);
+			if(now_num>0) e->SetbeHit(true);
+		}
+		
+		_bx=x+bx1[i];
+		if(e->HitRectangle(_bx,_by,_bx+bomb0[i].Width(),_by+bomb0[i].Height()) ){
+			if(num[1] != now_num && now_num!=0 && now_num!=4)	e->HP_reduce(40);
+			if(now_num>1) e->SetbeHit(true);
+		}
+		_bx=x+bx2[i];
+		if(e->HitRectangle(_bx,_by,_bx+bomb0[i].Width(),_by+bomb0[i].Height()) ){
+			if(num[1] != now_num && now_num!=0 && now_num!=1)	e->HP_reduce(40);
+			if(now_num>2) e->SetbeHit(true);
+		}
+	}
+	num[1]=now_num;
+	e->Set_hit_skill_num (num);
+}
+void Skill_son05::onMove(Chero *h){
+	
+	if( bomb2[0].IsFinalBitmap() ){
+		for(int i=0;i<2;i++){
+			hit[i].Reset();
+			bomb0[i].Reset();
+			bomb1[i].Reset();
+			bomb2[i].Reset();
+		}
+		isRun=false;
+	}
+	
+	SetX1(h->GetX1()+41);
+	SetY1(h->GetY2()-96);
+
+	if(isRun)
+		for(int i=0;i<2;i++){
+			if(!hit[i].IsFinalBitmap())
+				hit[i].OnMove();
+			if(hit[i].GetCurrentBitmapNumber()>8){
+				bomb0[i].OnMove();
+				bomb1[i].OnMove();
+				bomb2[i].OnMove();
+			}
+		}
+
+
+	if(menu.GetCurrentBitmapNumber()==0 && h->GetMP()>=40 && !h->IsSkill())
+		menu.OnMove();
+	else if(menu.GetCurrentBitmapNumber()!=0 && h->IsSkill()){
+		menu.OnMove();
+		if(!isRun)
+			menu.Reset();
+	}
+			
+}
+void Skill_son05::SetBx(Map *m){
+	hx = m->ScreenX(x);
+	hy = m->ScreenY(y);
+	by = 29;
+
+	bx0[0] = 37-25+dx;
+	bx1[0] = bx0[0]+59;
+	bx2[0] = bx1[0]+60;
+	
+	bx0[1] = -75+dx;
+	bx1[1] = bx0[1]-57;
+	bx2[1] = bx1[1]-60;
+}
+void Skill_son05::onShow(Chero *h,Map *m){
+
+	if( !h->IsLeft() )  dx=10;
+	else  dx=0;
+
+	SetBx(m);
+	
+	for(int i=0;i<2;i++){
+		hit[i].SetTopLeft(hx,hy);
+		bomb0[i].SetTopLeft(hx+bx0[i],hy+by);
+		bomb1[i].SetTopLeft(hx+bx1[i],hy+by);
+		bomb2[i].SetTopLeft(hx+bx2[i],hy+by);
+	}
+	
+/*
+	int sx = m->ScreenX(x);
+	int	sy = m->ScreenY(y);
+
+	hit[0].SetTopLeft(sx,sy);
+	hit[1].SetTopLeft(sx,sy);
+
+	bomb0[0].SetTopLeft(sx+37-25+dx,sy+29);
+	bomb1[0].SetTopLeft(sx+37-25+59+dx,sy+29);
+	bomb2[0].SetTopLeft(sx+37-25+59+60+dx,sy+29);
+
+	bomb0[1].SetTopLeft(sx-75+dx,sy+29);
+	bomb1[1].SetTopLeft(sx-75-57+dx,sy+29);
+	bomb2[1].SetTopLeft(sx-75-57-60+dx,sy+29);
+*/
+	if(isRun){
+		if(!hit[0].IsFinalBitmap() && !hit[1].IsFinalBitmap()){
+			if(!h->IsLeft())	
+				hit[0].OnShow();
+			else
+				hit[1].OnShow();
+		}
+		if(hit[0].GetCurrentBitmapNumber()>8 && hit[1].GetCurrentBitmapNumber()>8){
+			for(int i=0;i<2;i++){
+				bomb2[i].OnShow();
+				bomb1[i].OnShow();
+				bomb0[i].OnShow();
+			}
+		}
+	}
+
+	menu.SetTopLeft(50,50);
+	menu.OnShow();
+}
+int Skill_son05::GetX2(){ return x+hit[0].Width(); }
+int Skill_son05::GetY2(){ return y+hit[0].Height(); }
+//--------------------------------------------------------------------------
+EnemySkill_son01::EnemySkill_son01()
+{
+	height = 68;
+	IsEndPicture = false;
+	const int INITIAL_DOWNVELOCITY =1;
+	downVelocity = init_downVelocity = INITIAL_DOWNVELOCITY;
+}
+void EnemySkill_son01::SetIsEndPicture(bool flag){ IsEndPicture = flag;}
+void EnemySkill_son01::EonMove(Enemy_basic * e03,Map *m)
+{
+	const int MOVE_SIZE = 3;
+	CAnimation attack=e03->GetAttack();
+	bool temp1=(hit[0].GetCurrentBitmapNumber()!=0)&&(hit[0].GetCurrentBitmapNumber()!=3);
+	bool temp2=(hit[1].GetCurrentBitmapNumber()!=0)&&(hit[1].GetCurrentBitmapNumber()!=3);
+	
+	if(hit[0].IsFinalBitmap()||hit[1].IsFinalBitmap()){
+		IsEndPicture = true;
+		hit[0].Reset();
+		hit[1].Reset();
+	}
+
+	if(e03->IsAttack() && !IsEndPicture && attack.GetCurrentBitmapNumber()>=5){
+		if(e03->GetIsLeft()){
+			if(hit[0].GetCurrentBitmapNumber()<2)x-=MOVE_SIZE;
+		}
+		else{
+			if(hit[1].GetCurrentBitmapNumber()<2)x+=MOVE_SIZE;
+		}
+		
+		if(hit[0].GetCurrentBitmapNumber()!=3)	
+			hit[0].OnMove();
+		if(hit[1].GetCurrentBitmapNumber()!=3)
+			hit[1].OnMove();		
+		if(temp1 || temp2)
+			onfloor(m ,e03);
+	}
+	else {
+		downVelocity = init_downVelocity;	// 重設下降初始速度	
+		if(e03->GetIsLeft())
+			this->SetX1(e03->GetX1()-40);
+		else
+			this->SetX1(e03->GetX2()+40-18); //為了要和左邊的圖對稱,所以要扣掉香蕉的寬度
+		this->SetY1(e03->GetY1()-30);//常數值為圖片落地的座標,每張皆依樣高,即便其他張的物體比這張高或低
+	}
+	
+	
+	
+}
+void EnemySkill_son01::onfloor(Map *m,Enemy_basic * e03){
+
+	int count_floor=0;	//初始劃離地高度
+
+	for(count_floor=0 ; ; count_floor++)
+		if( m->IsEmpty( (x),(GetY2())+count_floor) ){}
+		else break;
+
+	if (count_floor >= downVelocity)
+		y += (downVelocity)++;		// y軸下降(移動velocity個點)// 受重力影響，下次的下降速度增加
+	else{
+		y +=count_floor;	//一次剛好到地
+		downVelocity = init_downVelocity;	// 重設下降初始速度	
+		if(!e03->GetIsLeft())hit[0].OnMove();
+		else hit[1].OnMove();
+	}
+}
+void EnemySkill_son01::LoadBitmap()
+{
+	string temp[7]={"0","1","2","3","4","5","6"};
+	string rl[2]={"r","l"};
+	Vanish[0].LoadBitmap("Bitmaps/enemy/monky/banana_r_6.bmp",RGB(0,255,255));
+	Vanish[1].LoadBitmap("Bitmaps/enemy/monky/banana_l_6.bmp",RGB(0,255,255));
+	for(int i=0;i<2;i++)
+		for(int j=1;j<5;j++){
+			hit[i].AddBitmap((char *)("Bitmaps/enemy/monky/"+temp[j]+".bmp").c_str(),RGB(0,255,255));
+			//hit[i].AddBitmap((char *)("Bitmaps/enemy/monky/banana_"+rl[i]+"_"+temp[j]+".bmp").c_str(),RGB(0,255,255));
+		}
+}
+void EnemySkill_son01::EonShow(Enemy_basic  * e03,Map * m)
+{	
+	int esx =GetX1() - m->GetSX();
+	int esy =GetY1() - m->GetSY();
+	bool temp=(e03->GetAttack().GetCurrentBitmapNumber()>=5);
+
+	
+	if(!e03->GetIsLeft() && !IsEndPicture && temp){
+		hit[0].SetTopLeft(esx,esy);
+		hit[0].OnShow();
+	}
+	else if(e03->GetIsLeft() && !IsEndPicture && temp){
+		hit[1].SetTopLeft(esx,esy);
+		hit[1].OnShow();
+	}
+	else{
+		Vanish[0].SetTopLeft(esx,esy);
+		Vanish[0].ShowBitmap();
+	}
+
+
+}
+
+int EnemySkill_son01::GetX2(){return x + hit[0].Width();}
+int EnemySkill_son01::GetY2(){return y + hit[0].Height();}
+//--------------------------------------------------------------------------
+
+//###################################################################################################################################
+//敵人
+Enemy_basic::Enemy_basic():x(0),y(0){
+	
+	const int INITIAL_DOWNVELOCITY =1;
+	downVelocity = init_downVelocity = INITIAL_DOWNVELOCITY;
+	
+	hitSkill_num[0]=hitSkill_num[1]=0;
+	
+	countBeHit=superTime =15;//受傷閃爍時間
+	recover_count=100; // 復活的時間 約3~5秒多
+	count_P_Direction=33; //用來給換方向時能更加靈活,約程式碼刷33次後才會再決定方向
+}
+int Enemy_basic::SetTotal_HP(){
+	return HP_total;
+};
+void Enemy_basic::init(Map *map){
+	
+	isAttack=beHit=isLeft=false;
+	countBeHit=superTime;
+	HP=SetTotal_HP();
+	SetIsAlive(true);//設定每一隻敵人初始化存活
+
+//---------------------------------------------------------------------------------
+	//const int X_area = 100;//偏移數 用來對初始化的敵人位置設定的值
+	//static int X_POS = 50;//第一隻敵人的X座標初始位置
+	
+	srand((int)time(NULL));//亂數種子
+			// 設定敵人的初始化座標
+	int direction = rand()%2+1; //亂數取得數值1到2決定敵人初始方位 1為左 
+	//int distance = rand()%5+1;		//用亂數來倍增距離
+	SetIsLeft(direction); //設定方向
+	SetX(x);	 //設定同物件的複數敵人的X初始位置
+	for(int j=this->GetY1();j<map->GetMapH();j++){
+		SetY(j);
+		if(!map->IsEmpty(GetX1(), GetY1()) ){  //判斷敵人是否有碰到障礙物 有碰到就修改敵人的座標
+			SetY(map->GetTGY() * map->GetBarrierH()-GetPcH()); //修改方式:用障礙物的Y座標再減去敵人圖片的高度即為的敵人左上角Y座標
+			break; //找到後就跳出迴圈換下一隻
+		}
+	}
+	//if(X_POS < map->GetMapW())
+	//	X_POS += 50; //讓距離變更大而已
+//---------------------------------------------------------------------------------
+}
+void Enemy_basic::onShow(Map* m){
+	int ex = x - m->GetSX();
+	int ey = y - m->GetSY();
+	
+	if( IsAlive() ){
+		if(beHit){
+			if(!isLeft){
+				BeHit[0].SetTopLeft(ex,ey);
+				BeHit[0].ShowBitmap();
+			}
+			else{
+				BeHit[1].SetTopLeft(ex,ey);
+				BeHit[1].ShowBitmap();
+			}
+		}
+		 else if(GetEnemyId()!=1  && isAttack){
+			if(!isLeft){
+				Attack[0].SetTopLeft(ex,ey);
+				Attack[0].OnShow();
+			}
+			else{
+				Attack[1].SetTopLeft(ex,ey);
+				Attack[1].OnShow();
+			}
+		}
+		else if(!isLeft && last_x < x){
+			Move[0].SetTopLeft(ex,ey);
+			Move[0].OnShow();
+		}
+		else if(isLeft && last_x > x){
+			Move[1].SetTopLeft(ex,ey);
+			Move[1].OnShow();
+		}
+		else if(last_x == x){
+			if(!isLeft){
+				Stand[0].SetTopLeft(ex,ey);
+				Stand[0].OnShow();
+			}
+			else{
+				Stand[1].SetTopLeft(ex,ey);
+				Stand[1].OnShow();
+			}
+		}
+
+		int HP_percent=(int)( ((double)HP/HP_total)*100 );
+		ShowHP(HP_percent,m);
+
+	}
+}
+void Enemy_basic::onMove(Map* m,Chero *h){
+	
+	for(int i=0;i<2;i++){
+		Move[i].OnMove();
+		Stand[i].OnMove();
+	}
+	
+	last_x=x; //上一個座標儲存 用在貼圖判斷
+		
+	if(IsAlive() ){//存活時
+
+		if(h->IsAttack()!=hit_num ||h->IsAttack()==0)
+			beHit=false;
+		
+		beHit_by_Hero1(h,m);
+
+		if(!beHit){
+			HitAI(h,m);
+			if(!isAttack && !InArea(h))		
+				Walking(h,m);	//怪物移動的範圍
+		}
+		onfloor(m);
+
+		if(HP<=0){//沒血時
+			beHit=false; //設定狀態為死亡		
+			SetIsAlive(false);
+		}
+		hit_num=h->IsAttack();
+	}
+	/*else{			//死亡	
+	//-------------------------復活時間計算
+		recover_count--;	
+		if(recover_count==0){	
+		//	SetIsAlive(true);
+			HP=HP_total;
+			recover_count=100;
+		}
+	//-------------------------
+	}*/
+}
+void Enemy_basic::Walking(Chero *h,Map *m){
+
+	//移動(警戒)範圍
+	srand((int)time(NULL));//亂數種子 用來對每隻怪物的移動範圍取亂數!
+	MOVE_RANGE = rand()%200+100; //範圍在100到200之間
+
+	//敵人的移動判斷解說：先判斷有無障礙物及有無到底端 唯有無障礙又沒到底端時才會繼續移動
+	/////////////////////////////////////////////////////////////////////////////
+	// 空的 | 沒到底			IsEmpty:回傳1為空的 回傳0為有障礙	
+	//---------------			IsScanFloor:回傳1表沒到底 回傳0為有到底
+	//	0	|	0		: 1
+	//---------------
+	//	0	|	1		: 1	
+	//---------------
+	//	1	|	0		: 1
+	//---------------
+	//	1	|	1		: 0		答案：1表示要換方向0則繼續移動  所以是and再加反向bar
+	//---------------
+	/////////////////////////////////////////////////////////////////////////////
+	//(右邊時)
+	if(!(m->IsEmpty(this->GetX2(),this->GetY2()-MODIFY_PCH)  && m->IsScanFloor(this->GetX2(),this->GetY2())))	//判斷右邊有無障礙擋住以及有無到底端(站在障礙物上時)
+		isLeft=true;	//換方向
+	else  //GetFx()唯一開始初始化時敵人的座標,以此來當作移動的範圍
+		if(this->GetX2()<GetFx() + MOVE_RANGE && !isLeft) x+=STEP_SIZE;		//this->GetX2()表示目前這物件敵人自己圖片的右邊座標(面相右時由右邊的點來判斷)
+		else isLeft=true; //換方向 移動範圍到底端時換方向
+	
+	//(左邊時)													
+	if(!(m->IsEmpty(this->GetX1(),this->GetY2()-MODIFY_PCH) && m->IsScanFloor(this->GetX1(),this->GetY2())))	//判斷左邊有無障礙擋住以及有無到底端(站在障礙物上時)
+		isLeft=false; 
+	else  	
+		 if(this->GetX1()>GetFx() - MOVE_RANGE && isLeft)  x-=STEP_SIZE;	//this->GetX1()為左 意思同上
+		 else  isLeft=false;
+}
+void Enemy_basic::onfloor(Map *m){
+	
+	int count_floor=0;	//初始劃離地高度
+	int number=0;
+	vector<MovingBarrier *>barrier=m->GetMovingBarrier();
+	
+	for(count_floor=0;;count_floor++){
+		//if( m->IsEmpty( (x+center),GetY2()+count_floor) && !IsTouchBarrier(barrier,count_floor,&number) ){}
+		//else break;
+		if( m->IsEmpty( (x+center),(y+height)+count_floor) ){}
+		else break;
+	}
+	if (count_floor >= downVelocity)
+		y += (downVelocity)++;		// y軸下降(移動velocity個點)// 受重力影響，下次的下降速度增加
+	else{
+		y +=count_floor;	//一次剛好到地
+		downVelocity = init_downVelocity;	// 重設下降初始速度	
+	}
+/*
+	//------------------------------------------------------------------------
+	int dx,dy,adjust;
+	if( IsTouchBarrier(barrier,0,&number) ){
+		dx= barrier[number]->GetXchange();
+		dy= barrier[number]->GetYchange();
+		if(dy>=0)
+			adjust=0;
+		else
+			adjust=dy;
+	}
+	if( IsTouchBarrier(barrier,adjust,&number) ){
+		x+=dx;
+		y+=dy;
+	}
+	//------------------------------------------------------------------------
+*/
+}
+bool Enemy_basic::IsTouchBarrier(vector<MovingBarrier *> b,int count,int *number){
+
+	for(int i=0;i<(int)b.size();i++)
+		if(GetX1() >= b[i]->GetX() && GetX2() <= b[i]->GetX()+110){ 
+			if( GetY2()+count == b[i]->GetY() ){
+				*number=i;
+				return true;
+			}
+			if( GetY2()+count+b[i]->GetYchange() == b[i]->GetY() ){
+				*number=i;
+				return true;
+			}
+		}
+	return false;
+
+}
+int Enemy_basic::GetX1(){ return x; }
+int Enemy_basic::GetY1(){ return y; }
+int Enemy_basic::GetX2(){ return x + Move[0].Width();  }
+int Enemy_basic::GetY2(){ return y + Move[0].Height(); }
+int Enemy_basic::GetPcH(){return Move[0].Height();}
+int Enemy_basic::GetPcW(){return Move[0].Width();}
+int Enemy_basic::GetFx() const {return fix_x;}
+int Enemy_basic::GetEnemyId(){return EnemyId;}
+void Enemy_basic::SetX(int x_pos){
+	x = x_pos;
+	fix_x = x_pos;
+}
+void Enemy_basic::SetY(int y_pos){y = y_pos;}
+bool Enemy_basic::IsAlive(){return is_alive;}
+void Enemy_basic::SetIsAlive(bool alive){is_alive = alive;}
+bool Enemy_basic::IsAttack(){return isAttack;}
+bool Enemy_basic::GetIsLeft(){return isLeft;}
+void Enemy_basic::SetbeHit(bool flag){ beHit=flag; }
+int* Enemy_basic::hit_skill_num(){ return hitSkill_num;}
+void Enemy_basic::Set_hit_skill_num(int *num){
+	hitSkill_num[0] = num[0];
+	hitSkill_num[1] = num[1];
+}
+void Enemy_basic::SetIsLeft(int d){
+	if(count_P_Direction==0){
+		if(!isLeft)
+			isLeft = true; //1為左邊
+		else
+			isLeft = false;
+		count_P_Direction=33;
+	}
+	else 
+		count_P_Direction--;
+}
+void Enemy_basic::HP_reduce(int r){ HP-=r;}
+void Enemy_basic::ShowHP(int percent,Map *m){
+	if (!SHOW_LOAD_PROGRESS)
+		return;
+	const int bar_width = ( GetX2()-GetX1() )*2;//60;		38
+	const int bar_height = 6;		
+	const int x1=m->ScreenX(GetX1()-bar_width/4);
+	const int x2 = x1 + bar_width;
+	const int y1 = m->ScreenY(GetY1()-15); //-15
+	const int y2 = y1 + bar_height;
+	const int pen_width = 1;//bar_height / 5;
+	const int progress_x1 = x1 + pen_width;
+	const int progress_x2 = progress_x1 + percent * (bar_width-2*pen_width) / 100;
+	const int progress_x2_end = x2 - pen_width;
+	const int progress_y1 = y1 + pen_width;
+	const int progress_y2 = y2 - pen_width;
+
+	
+	CDC *pDC = CDDraw::GetBackCDC();			// 取得 Back Plain 的 CDC 
+	CPen *pp, p(PS_NULL, 0, RGB(0,0,0));		// 清除pen
+	pp = pDC->SelectObject(&p);
+
+	CBrush *pb, b(RGB(255,255,0));				// 畫黃色 progress框
+	pb = pDC->SelectObject(&b);
+	pDC->Rectangle(x1,y1,x2,y2);				
+
+	CBrush b1(RGB(220,160,160) );//DEFAULT_BG_COLOR);				// 畫黑色 progrss中心
+	pDC->SelectObject(&b1);
+	pDC->Rectangle(progress_x1,progress_y1,progress_x2_end,progress_y2);
+
+	CBrush b2(RGB(255,0,0));					// 畫紅色 progrss進度
+	pDC->SelectObject(&b2);
+	pDC->Rectangle(progress_x1,progress_y1,progress_x2,progress_y2);
+
+	pDC->SelectObject(pp);						// 釋放 pen
+	pDC->SelectObject(pb);						// 釋放 brush
+	CDDraw::ReleaseBackCDC();					// 放掉 Back Plain 的 CDC
+
+}
+bool Enemy_basic::beHit_by_Hero(Chero *h){//被主角打
+	vector<Skill_basic *> skill = h->GetSkill();
+	CAnimation  hit = h->GetHitAnimation();
+
+//  段數一  //----------------------------------------------------------------------------------	
+	if(h->IsAttack()==1 && (int)hit.GetCurrentBitmapNumber()==2)	//GetCurrentBitmapNumber()==1  0為第一張圖，1為第二張圖
+		return skill[0]->isHitRectangle(GetX1(),GetY1(),GetX2(),GetY2() );
+
+//  段數二  //----------------------------------------------------------------------------------	
+	else if(h->IsAttack()==2 && hit.GetCurrentBitmapNumber()==2)
+		return skill[1]->isHitRectangle(GetX1(),GetY1(),GetX2(),GetY2() );
+
+//  段數三  //----------------------------------------------------------------------------------
+	else if(h->IsAttack()==3 && hit.GetCurrentBitmapNumber()==3)
+		return skill[2]->isHitRectangle(GetX1(),GetY1(),GetX2(),GetY2() );
+
+//  沒被打  //----------------------------------------------------------------------------------
+	return false;
+}
+void Enemy_basic::beHit_by_Hero1(Chero *h,Map *m){//被主角打
+	vector<Skill_basic *> skill = h->GetSkill();
+	CAnimation  hit = h->GetHitAnimation();
+	int dx;
+	if(!h->IsLeft())dx=30;
+	else dx=-30;
+//  段數一  //----------------------------------------
+	if(h->IsAttack()==1 && (int)hit.GetCurrentBitmapNumber()==2)	
+		if( skill[0]->isHitRectangle(GetX1(),GetY1(),GetX2(),GetY2()) )	{
+			if(!beHit){
+				HP_reduce(5);	
+				beHit=true;
+			}
+			if(x+(dx/4) > 0 && x+(dx/4) < m->GetMapW())
+				x+=dx/4;	//被打移動
+		}
+//  段數二  //----------------------------------------
+	if(h->IsAttack()==2 && hit.GetCurrentBitmapNumber()==2)
+		if( skill[1]->isHitRectangle(GetX1(),GetY1(),GetX2(),GetY2()) ){	
+			if(!beHit){
+				HP_reduce(5);
+				beHit=true;
+			}
+			if(x+(dx/4) > 0 && x+(dx/4) < m->GetMapW())
+				x+=dx/4;
+		}
+//  段數三  //----------------------------------------
+	if(h->IsAttack()==3 && hit.GetCurrentBitmapNumber()==3)
+		if( skill[2]->isHitRectangle(GetX1(),GetY1(),GetX2(),GetY2()) ){	
+			if(!beHit){
+				HP_reduce(5);
+				beHit=true;
+			}
+			if(x+(dx/4) > 0 && x+(dx/4) < m->GetMapW())
+				x+=dx/4;
+		}
+//   招式   //----------------------------------------
+	for(int i=0;i<(int)skill.size();i++)
+		skill[i]->HitEnemy(this);
+	
+}
+bool Enemy_basic::isHitHero(Chero *h){
+	return false;
+}
+bool Enemy_basic::HitRectangle(int tx1, int ty1, int tx2, int ty2){	// 是否碰到參數範圍的矩形
+	int x1 = GetX1();				// 球的左上角x座標
+	int y1 = GetY1();				// 球的左上角y座標
+	int x2 = GetX2();	// 球的右下角x座標
+	int y2 = GetY2();	// 球的右下角y座標
+
+	return (tx2 >= x1 && tx1 <= x2 && ty2 >= y1 && ty1 <= y2);
+}
+//###################################################################################################################################
+Enemy_son01::Enemy_son01(int fx,int fy){
+	EnemyId=1;
+	x=fx , y=fy;
+	left_x=0 ,right_x=43;
+	height=54;
+	HP_total=150;
+
+	center=(left_x+right_x)/2;
+	STEP_SIZE = 2; 
+	MODIFY_PCH = 2; //圖片的修改高度
+	
+	Move[0].SetDelayCount(6);
+	Move[1].SetDelayCount(6);
+
+}
+void Enemy_son01::LoadBitmap(){
+	char *move_r[3]={"Bitmaps/enemy/devil_cat/move_r01.bmp","Bitmaps/enemy/devil_cat/move_r02.bmp","Bitmaps/enemy/devil_cat/move_r03.bmp"};
+	char *move_l[3]={"Bitmaps/enemy/devil_cat/move_l01.bmp","Bitmaps/enemy/devil_cat/move_l02.bmp","Bitmaps/enemy/devil_cat/move_l03.bmp"};
+	for (int i = 0; i < 3;i++){
+		Move[0].AddBitmap(move_r[i], RGB(0,255,128));
+		Move[1].AddBitmap(move_l[i], RGB(0,255,128));
+		Stand[0].AddBitmap(move_r[i], RGB(0,255,128));
+		Stand[1].AddBitmap(move_l[i], RGB(0,255,128));
+	}
+	BeHit[0].LoadBitmap("Bitmaps/enemy/devil_cat/behit_r.bmp",RGB(0,255,128));
+	BeHit[1].LoadBitmap("Bitmaps/enemy/devil_cat/behit_l.bmp",RGB(0,255,128));
+	
+}
+bool Enemy_son01::InArea(Chero *h){
+	return true;
+}
+void Enemy_son01::HitAI(Chero *h,Map *m){
+	Walking(h,m);
+}
+//----------------------------------------------------------------------------
+Enemy_son02::Enemy_son02(int fx,int fy){
+	EnemyId=2;
+	x=fx , y=fy;
+	left_x=205 ,right_x=268;
+	height=243;
+	HP_total=500;
+
+	center=(left_x+right_x)/2;
+	rangeX = GetX1()+center;
+	
+	countHit=HitTime=30;			//打鬥間隔
+	count_wait=waitTime=200;		//警戒間隔
+
+	STEP_SIZE = 5;	//移動量
+		
+	for(int i=0;i<2;i++){
+		Move[i].SetDelayCount(4);
+		Attack[i].SetDelayCount(6);
+	}
+}
+void Enemy_son02::LoadBitmap(){
+	string temp[12]={"0","1","2","3","4","5","6","7","8","9","10","11"};
+	string rl[2]={"r","l"};
+
+	for(int j=0;j<2;j++){
+
+		BeHit[j].LoadBitmap((char *)("Bitmaps/enemy/ox/behit_"+rl[j]+".bmp").c_str(),RGB(128,0,255));
+
+		for(int i=0;i<12;i++)
+			if(i<6){
+				Move[j].AddBitmap((char *)("Bitmaps/enemy/ox/move_"+rl[j]+temp[i]+".bmp").c_str(),RGB(128,0,255) );
+				Stand[j].AddBitmap((char *)("Bitmaps/enemy/ox/stand_"+rl[j]+temp[i]+".bmp").c_str(),RGB(128,0,255) );
+				if(i!=5 )
+					Attack[j].AddBitmap((char *)("Bitmaps/enemy/ox/attack_"+rl[j]+temp[i]+".bmp").c_str(),RGB(128,0,255) );
+			}
+			else if(i<8)
+				Stand[j].AddBitmap((char *)("Bitmaps/enemy/ox/stand_"+rl[j]+temp[i]+".bmp").c_str(),RGB(128,0,255) );
+	}
+}
+bool Enemy_son02::InArea(Chero *h){
+	int Area=300;
+	bool condition1=(GetX2()+Area)>(h->GetX1());
+	bool condition2=(GetX1()-Area)<(h->GetX2());
+
+	if( condition1 && condition2 && h->GetY2()<=GetY2() && h->GetY2()>=GetY1()){
+		if(GetX1()<= h->GetX1() )
+			isLeft=false;
+		else
+			isLeft=true;
+		return true;	
+	}
+	return false;
+}
+void Enemy_son02::HitAI(Chero *h,Map *m){
+	if(!isAttack && InArea(h) && countHit==HitTime){
+		if(GetX2()<= h->GetX1()-60  && h->GetY2()<=GetY2() && h->GetY2()>=GetY1() &&  GetX2()< m->GetMapW())
+			x+=STEP_SIZE;
+		else if( GetX1()>= h->GetX2()+60 && h->GetY2()<=GetY2() && h->GetY2()>=GetY1() && GetX1()>0 )
+			x-=STEP_SIZE;
+	}
+	int area=100;
+	
+	if( !isAttack && !beHit){//沒打人，沒被打
+		if(countHit==HitTime){
+			if( (GetX2()+area)>(h->GetX1()) && (GetX1()-area)<(h->GetX2())  && h->GetY2()<=GetY2() && h->GetY2()>=GetY1()){
+				isAttack=true;
+				countHit--;
+			}
+		}
+		else if(countHit<HitTime)
+			countHit--;
+	}		
+	if(countHit<0)
+		countHit=HitTime;
+
+	if(Attack[0].IsFinalBitmap()||Attack[1].IsFinalBitmap()){ 
+		Attack[0].Reset();
+		Attack[1].Reset();	
+		isAttack=false;
+	}
+}
+void Enemy_son02::Walking(Chero *h,Map *m){
+	srand((int)time(NULL));
+
+	int i=rand()%100+1;
+	if(i%4==0)
+		MOVE_RANGE = rand()%500+100; //範圍在100到500之間
+	
+	int area=MOVE_RANGE;
+	int speed=STEP_SIZE;
+
+	if ( GetX2()+speed < m->GetMapW() && GetX1()-speed >0){
+		if (x+speed < rangeX+area && !isLeft && !m->IsEmpty(GetX2()+speed,GetY2()) )
+			x+=speed;
+		else{
+			count_wait--;
+			if(count_wait<0){			
+				isLeft=true;
+				count_wait=waitTime;
+			}
+		}
+		if(x-speed > rangeX-area && isLeft && !m->IsEmpty(GetX1()-speed,GetY2()))
+			x-=speed;
+		else{
+			count_wait--;
+			if(count_wait<0){	
+				isLeft=false;
+				count_wait=waitTime;
+			}
+		}
+	}
+
+}
+void Enemy_son02::onMove(Map* m,Chero *h){
+	
+	for(int i=0;i<2;i++){
+		Move[i].OnMove();
+		Stand[i].OnMove();
+		if(isAttack)
+			Attack[i].OnMove();
+	}
+
+	last_x=x; //上一個座標儲存 用在貼圖判斷	
+	if(IsAlive() ){//存活時
+		if(h->IsAttack()!=hit_num ||h->IsAttack()==0)
+			beHit=false;
+		
+		beHit_by_Hero1(h,m);
+	
+		if(!beHit){
+			HitAI(h,m);
+			if(!isAttack && !InArea(h))		
+				Walking(h,m);	//怪物移動的範圍
+		}
+		onfloor(m);
+
+		if(HP<=0){//沒血時
+			beHit=false; //設定狀態為死亡		
+			SetIsAlive(false);
+		}
+		hit_num=h->IsAttack();
+	}
+}
+void Enemy_son02::onShow(Map* m){
+	int ex = x - m->GetSX();
+	int ey = y - m->GetSY();
+	
+	if( IsAlive() ){
+		if(GetEnemyId()!=1 && isAttack){
+			if(!isLeft){
+				Attack[0].SetTopLeft(ex,ey);
+				Attack[0].OnShow();
+			}
+			else{
+				Attack[1].SetTopLeft(ex,ey);
+				Attack[1].OnShow();
+			}
+		}
+		else if(beHit){
+			if(!isLeft){
+				BeHit[0].SetTopLeft(ex,ey);
+				BeHit[0].ShowBitmap();
+			}
+			else{
+				BeHit[1].SetTopLeft(ex,ey);
+				BeHit[1].ShowBitmap();
+			}
+		}
+		else if(!isLeft && last_x < x){
+			Move[0].SetTopLeft(ex,ey);
+			Move[0].OnShow();
+		}
+		else if(isLeft && last_x > x){
+			Move[1].SetTopLeft(ex,ey);
+			Move[1].OnShow();
+		}
+		else if(last_x == x){
+			if(!isLeft){
+				Stand[0].SetTopLeft(ex,ey);
+				Stand[0].OnShow();
+			}
+			else{
+				Stand[1].SetTopLeft(ex,ey);
+				Stand[1].OnShow();
+			}
+		}
+
+		int HP_percent=(int)( ((double)HP/HP_total)*100 );
+		ShowHP(HP_percent,m);
+
+	}
+}
+bool Enemy_son02::isHitHero(Chero *h){
+
+	if(!isLeft && (Attack[0].GetCurrentBitmapNumber()==2 || Attack[0].GetCurrentBitmapNumber()==3) )
+		return h->HitRectangle(GetX2()+23,GetY1()-130,GetX2()+186,GetY2());	
+	else if(isLeft && (Attack[0].GetCurrentBitmapNumber()==2 || Attack[0].GetCurrentBitmapNumber()==3) )
+		return h->HitRectangle(GetX1()-185,GetY1()-130,GetX1()-22,GetY2());
+	return false;
+}
+int Enemy_son02::GetX1(){return x+left_x;}
+int Enemy_son02::GetX2(){return x+right_x;}
+int Enemy_son02::GetY1(){return y+120;}
+int Enemy_son02::GetY2(){return y+height;}
+//----------------------------------------------------------------------------Enemy_son01::Enemy_son01(){
+Enemy_son03::Enemy_son03(int fx,int fy){
+	//srand((int)time(NULL));//亂數種子 
+	EnemyId=3;
+	x=fx;
+	y=fy;
+	left_x=49 ,right_x=97;		//設定範圍
+	height=72;						//腳踩地點
+	HP_total=500;
+	countHit=HitTime=30;//打鬥間隔
+	count_move=moveTime=rand()%250+100; //移動時間
+	count_wait=waitTime=rand()%200+50;		//警戒間隔
+	//MOVE_RANGE =150; //怪物的移動範圍
+	MOVE_RANGE = rand()%300+100; //範圍在100到500之間
+	center=(left_x+right_x)/2;
+	STEP_SIZE = 2;	//移動量
+	MODIFY_PCH = 2; //圖片的修改高度
+
+	es01.push_back( new EnemySkill_son01() );
+
+	Move[0].SetDelayCount(6);
+	Move[1].SetDelayCount(6);
+
+}
+void Enemy_son03::LoadBitmap(){
+	string temp[11]={"0","1","2","3","4","5","6","7","8","9","10"};
+	string rl[2]={"r","l"};
+	Vanish[0].LoadBitmap("Bitmaps/enemy/monky/die_r_3.bmp",RGB(0,255,255));
+	Vanish[1].LoadBitmap("Bitmaps/enemy/monky/die_r_3.bmp",RGB(0,255,255));
+	for(int j=0;j<2;j++){
+
+		BeHit[j].LoadBitmap((char *)("Bitmaps/enemy/monky/behit_"+rl[j]+".bmp").c_str(),RGB(0,255,255));
+
+		for(int i=0;i<11;i++){
+			if(i < 4){
+				Move[j].AddBitmap((char *)("Bitmaps/enemy/monky/move_"+rl[j]+"_"+temp[i]+".bmp").c_str(),RGB(0,255,255) );
+				if(i<3)
+				Die[j].AddBitmap((char *)("Bitmaps/enemy/monky/die_"+rl[j]+"_"+temp[i]+".bmp").c_str(),RGB(0,255,255));
+				if(i<1)
+					Stand[j].AddBitmap((char *)("Bitmaps/enemy/monky/stand_"+rl[j]+"_"+temp[i]+".bmp").c_str(),RGB(0,255,255));
+			}
+			Attack[j].AddBitmap((char *)("Bitmaps/enemy/monky/attack_"+rl[j]+"_"+temp[i]+".bmp").c_str(),RGB(0,255,255) );
+		}
+	}
+	for(int i=0;i<(int)es01.size();i++)
+		es01[i]->LoadBitmap();
+}
+bool Enemy_son03::InArea(Chero *h){//攻擊範圍中
+	int Area=100;
+	int Center = (GetX1()+GetX2())/2; //取怪物X軸的中心點
+	int hero_center=(h->GetX1()+h->GetX2())/2;
+	bool condition1=(GetX2()+Area)>(h->GetX1());
+	bool condition2=(GetX1()-Area)<(h->GetX2());
+
+	if( condition1 && condition2 && h->GetY2()<=GetY2() && h->GetY2()>=GetY1()){
+		if(Center<= hero_center )
+			isLeft=false;
+		else
+			isLeft=true;
+		return true;	
+	}
+	return false;
+}
+void Enemy_son03::HitAI(Chero *h,Map *m){//攻擊型態
+	if(!isAttack && InArea(h) ){
+		//if(GetX2()<= h->GetX1()  && h->GetY2()<=GetY2() && h->GetY2()>=GetY1() &&  GetX2()< m->GetMapW())
+			//x+=STEP_SIZE;
+		//else if( GetX1()>= h->GetX2() && h->GetY2()<=GetY2() && h->GetY2()>=GetY1() && GetX1()>0 )
+			//x-=STEP_SIZE;	
+	}
+
+	int area=100;
+	
+	if( !isAttack && !beHit){//沒打人，沒被打
+	
+	//if(!isAttack){
+		for(int i=0;i<(int)es01.size();i++) 
+			es01[i]->SetIsEndPicture(false);
+	//}
+		if(countHit==HitTime){
+			if( (GetX2()+area)>(h->GetX1()) && (GetX1()-area)<(h->GetX2())  && h->GetY2()<=GetY2() && h->GetY2()>=GetY1() && isAttack==false){
+				isAttack=true;
+				countHit--;
+			}
+		}
+		else if(countHit<HitTime)
+			countHit--;
+	}
+	if(countHit<0)
+		countHit=HitTime;
+
+	
+	for(int i=0;i<(int)es01.size();i++) 
+		es01[i]->EonMove(this,m);
+
+	if(Attack[0].IsFinalBitmap()||Attack[1].IsFinalBitmap()){ 
+		Attack[0].Reset();
+		Attack[1].Reset();
+		isAttack=false;
+	}
+	/*
+	if(!isAttack){
+		for(int i=0;i<(int)es01.size();i++) 
+			es01[i]->SetIsEndPicture(false);
+	}
+	*/
+}
+void Enemy_son03::onMove(Map* m,Chero *h){
+	
+	srand((int)time(NULL));//亂數種子 用來對每隻怪物的移動範圍取亂數!
+
+	int direction =rand()%9+1; //1為左
+	//int IsStand = rand()%10+1; //1是站著
+	for(int i=0;i<2;i++){
+		Move[i].OnMove();
+		Stand[i].OnMove();
+		Die[i].OnMove();
+		if(isAttack ){
+			Attack[i].OnMove();
+		}
+	}
+	
+	last_x=x; //上一個座標儲存 用在貼圖判斷
+		
+	if(IsAlive() ){//存活時
+		
+		if(h->IsAttack()!=hit_num ||h->IsAttack()==0)
+			beHit=false;
+		
+		beHit_by_Hero1(h,m);
+
+		//if(!beHit){
+			HitAI(h,m);
+			if(!isAttack && !InArea(h) ){//讓怪物可以不要一直走動偶爾可以停一下
+				if(count_wait==waitTime ){	
+					Walking(h,m);	//怪物移動的範圍
+					count_move--;
+					if(count_move<0)
+						count_wait--;
+				}
+				else{
+					count_wait--;		//警戒間隔
+					this->SetIsLeft(direction);
+					if(count_wait<0){
+						moveTime=rand()%250+100;
+						waitTime=rand()%250+50;
+						count_move=moveTime;
+						count_wait=waitTime;
+					}
+				}
+			}
+		//}
+		onfloor(m);
+
+
+		if(HP<=0){//沒血時
+			beHit=false; //設定狀態為死亡		
+			SetIsAlive(false);
+		}
+
+	}
+	else{			//死亡	
+		HP=HP_total;
+		isAttack=false;
+	}
+}
+bool Enemy_son03::isHitHero(Chero *h){ //香蕉圖片能傷到主角的Func
+	int sx1,sx2,sy1,sy2;
+	for(int i=0;i<(int)es01.size();i++){
+		sx1=es01[i]->GetX1();
+		sx2=es01[i]->GetX2();
+		sy1=es01[i]->GetY1();
+		sy2=es01[i]->GetY2();
+		if(h->HitRectangle(sx1,sy1,sx2,sy2) && isAttack && GetAttack().GetCurrentBitmapNumber()>=5)
+			return true;
+	}
+	return false;
+}
+void  Enemy_son03::onShow(Map* m)
+{
+	if(isAttack  )
+		for(int i=0;i<(int)es01.size();i++) 
+			es01[i]->EonShow(this,m);	
+	Enemy_basic::onShow(m);
+}
+int Enemy_son03::GetX1(){
+	return x+left_x;
+}
+int Enemy_son03::GetX2(){
+	return x+right_x;
+}
+int Enemy_son03::GetY1(){
+	return y+20; //猴子的頭頭座標
+}
+int Enemy_son03::GetY2(){
+	return y+height;
+}
+CAnimation Enemy_son03::GetAttack(){
+	if(!isLeft)
+		return Attack[0];
+	else
+		return Attack[1];
+}
+//-----------------------------------------------------
+Enemy_son04::Enemy_son04(int fx,int fy){
+
+	EnemyId=4;//用來辨識主角被打時個別扣的血量
+	x=fx , y=fy;
+	left_x=60 ,right_x=153;
+	height=134;
+	HP_total=100;//原來的血量
+	state =2;
+	countHit=HitTime=30;//打鬥間隔
+	count_move=moveTime=rand()%250+100; //移動時間
+	count_wait=waitTime=rand()%200+50;		//警戒間隔
+	center=(left_x+right_x)/2;
+	STEP_SIZE = 3; 
+	MODIFY_PCH = 2; //圖片的修改高度
+	MOVE_RANGE = rand()%300+100; //範圍在100到500之間
+
+	Move[0].SetDelayCount(6);
+	Move[1].SetDelayCount(6);
+	
+}
+void Enemy_son04::LoadBitmap(){
+	string temp[11]={"0","1","2","3","4","5","6","7","8","9","10"};
+	string rl[2]={"r","l"};
+	Vanish[0].LoadBitmap("Bitmaps/enemy/toy/die_r_5.bmp",RGB(0,255,255));
+	Vanish[1].LoadBitmap("Bitmaps/enemy/toy/die_l_5.bmp",RGB(0,255,255));
+	for(int j=0;j<2;j++){
+
+		BeHit[j].LoadBitmap((char *)("Bitmaps/enemy/toy/hit_"+rl[j]+".bmp").c_str(),RGB(0,255,255));
+
+		for(int i=0;i<11;i++){
+			if(i < 10){
+				Stand[j].AddBitmap((char *)("Bitmaps/enemy/toy/stand_"+rl[j]+"_"+temp[i]+".bmp").c_str(),RGB(0,255,255));
+				if(i<7)
+					Move[j].AddBitmap((char *)("Bitmaps/enemy/toy/move_"+rl[j]+"_"+temp[i]+".bmp").c_str(),RGB(0,255,255) );
+				if(i<5){
+					Attack[j].AddBitmap((char *)("Bitmaps/enemy/toy/attack_"+rl[j]+"_"+temp[i]+".bmp").c_str(),RGB(0,255,255) );
+					Die[j].AddBitmap((char *)("Bitmaps/enemy/toy/die_"+rl[j]+"_"+temp[i]+".bmp").c_str(),RGB(0,255,255));
+				}
+					
+			}
+			
+		}
+	}
+}
+bool Enemy_son04::InArea(Chero *h){
+	int Area=200;
+	int h_area = 100;
+	int h_center =(h->GetX1() +h->GetX2())/2 ;
+	int Center = (GetX1()+GetX2())/2; //取怪物X軸的中心點
+	bool condition1=(GetX2()+Area)>(h->GetX1()); //主角在怪物的右邊範圍內 
+	bool condition2=(GetX1()-Area)<(h->GetX2()); //主角在怪物的左邊範圍內 
+
+	if( condition1 && condition2 && h->GetY2()<=GetY2() && h->GetY2()>=GetY1()+79){ //交集所以是主角在怪物的左邊到右邊範圍內
+		//if(Center<= h->GetX1()+ h_area)
+		//if(Center<= h_center + h_area  && (state ==2 || state== 1))
+			//isLeft=false;
+		//else if(Center >= h->GetX1() + h_area)
+		//else if(  Center>=(h_center - h_area) && (state ==2 || state== 3))
+			//isLeft=true;
+		return true;	
+	}
+	return false;
+}
+
+void Enemy_son04::HitAI(Chero *h,Map *m){
+	int h_area=100;
+	int attack_speed=STEP_SIZE+7;
+	int h_center =(h->GetX1() +h->GetX2())/2 ;
+	int Center = (GetX1()+GetX2())/2; //取怪物X軸的中心點
+	if(  InArea(h) && !beHit){ //若在範圍內且沒被打的話就追擊主角
+		isAttack = true; //設為攻擊狀態切換攻擊圖片
+		if(Center<= h_center + h_area && !isLeft /*&& (state ==2 || state== 3)*/&& h->GetY2()<=GetY2() && h->GetY2()>=GetY1())
+		{ //為了可以連續衝撞主角 假若目前在該主角右邊的某一個範圍內且在左邊狀態
+			isLeft = false; //設為左邊
+			
+			if(Center >= h_center + h_area || m->IsEmpty(this->GetX2()+attack_speed,this->GetY2()))//若超出的右邊的範圍後且右邊怪物前面那一點(x2座標)(移動範圍)是空的 變換方向狀態 
+			{	
+				isLeft = true ;
+				//state=1;
+			}
+			x+=(attack_speed); //樣右移動
+		}
+		//else if(Center>= h_center - h_area && isLeft /*&& (state ==2 || state== 1)*/&& h->GetY2()<=GetY2() && h->GetY2()>=GetY1())
+		else //此為在主角右邊範圍後 再變換方向
+		{
+			isLeft = true;//向左
+			
+			if(Center <= (h_center - h_area) || m->IsEmpty(this->GetX1()-attack_speed,this->GetY2()) ) //超過主角左邊範圍後且左邊怪物前面那一點(x1座標)(移動範圍)是空的 再變換方向 
+			{	
+				isLeft = false ;
+				//state=3;
+			}
+			x-=(attack_speed);//移動
+		}
+	}
+	else{
+		isAttack =false;
+		//state =2;	
+	}
+	/*
+	if( isAttack)
+	{//沒打人，沒被打
+		//isAttack = true;
+		if((h->GetX1() - Area) > GetX2() && h->GetY2()<=GetY2() && h->GetY2()>=GetY1())
+		{
+			isLeft = false;
+			x+=(STEP_SIZE+20);
+		}
+		else if((h->GetX2() + Area) < GetX1() && h->GetY2()<=GetY2() && h->GetY2()>=GetY1())
+		{
+			isLeft = true;
+			x-=(STEP_SIZE+20);
+		}
+	}
+	*/
+}
+
+bool Enemy_son04::isHitHero(Chero *h){
+/*
+	if(h->HitRectangle(sx1,sy1,sx2,sy2) && isAttack)
+			return true;
+*/
+	return false;
+}
+
+int Enemy_son04::GetX1(){
+	return x+left_x;
+}
+int Enemy_son04::GetX2(){
+	return x+right_x;
+}
+int Enemy_son04::GetY1(){
+	return y+11; 
+}
+int Enemy_son04::GetY2(){
+	return y+height;
+}
+
+void Enemy_son04::onMove(Map * m,Chero * h){
+
+	srand((int)time(NULL));//亂數種子 用來對每隻怪物的移動範圍取亂數!
+	int direction =rand()%9+1; //1為左
+	for(int i=0;i<2;i++){ 
+		Move[i].OnMove();
+		Stand[i].OnMove();
+		Die[i].OnMove();
+		if(isAttack ){
+			Attack[i].OnMove();
+		}
+	}
+	last_x=x; //上一個座標儲存 用在貼圖判斷
+		
+	if(IsAlive() ){//存活時
+		
+		if(h->IsAttack()!=hit_num ||h->IsAttack()==0)
+			beHit=false;
+		
+		beHit_by_Hero1(h,m);
+	
+		if(!beHit){
+			HitAI(h,m);
+			if(!isAttack && !InArea(h) ){//讓怪物可以不要一直走動偶爾可以停一下
+				if(count_wait==waitTime ){	
+					Walking(h,m);	//怪物移動的範圍
+					count_move--;
+					if(count_move<0)
+						count_wait--;
+				}
+				else{
+					count_wait--;		//警戒間隔
+					this->SetIsLeft(direction);
+					if(count_wait<0){
+						moveTime=rand()%250+100;
+						waitTime=rand()%250+50;
+						count_move=moveTime;
+						count_wait=waitTime;
+					}
+				}
+			}
+		}
+		onfloor(m);
+
+
+		if(HP<=0){//沒血時
+			beHit=false; //設定狀態為死亡		
+			SetIsAlive(false);
+		}
+
+	}
+	else{			//死亡	
+		HP=HP_total;
+		isAttack=false;
+	}
+}
+void Enemy_son04::onShow(Map* m){
+	int ex = x - m->GetSX();
+	int ey = y - m->GetSY();
+	
+	if( IsAlive() ){
+		if(beHit){
+			if(!isLeft){
+				BeHit[0].SetTopLeft(ex,ey);
+				BeHit[0].ShowBitmap();
+			}
+			else{
+				BeHit[1].SetTopLeft(ex,ey);
+				BeHit[1].ShowBitmap();
+			}
+		}
+		 else if(GetEnemyId()!=1  && isAttack){
+			if(!isLeft){
+				Attack[0].SetTopLeft(ex,ey);
+				Attack[0].OnShow();
+			}
+			else{
+				Attack[1].SetTopLeft(ex,ey);
+				Attack[1].OnShow();
+			}
+		}
+		else if(!isLeft && last_x < x){
+			Move[0].SetTopLeft(ex,ey);
+			Move[0].OnShow();
+		}
+		else if(isLeft && last_x > x){
+			Move[1].SetTopLeft(ex,ey);
+			Move[1].OnShow();
+		}
+		else if(last_x == x && !isAttack){
+			if(!isLeft){
+				Stand[0].SetTopLeft(ex,ey);
+				Stand[0].OnShow();
+			}
+			else{
+				Stand[1].SetTopLeft(ex,ey);
+				Stand[1].OnShow();
+			}
+		}
+/*
+		if(!isLeft && last_x <= x){
+			if(beHit){
+				BeHit[0].SetTopLeft(ex,ey-3);
+				BeHit[0].ShowBitmap();
+			}
+			else{
+				Move[0].SetTopLeft(ex,ey);
+				Move[0].OnShow();
+			}
+		}
+		else if(isLeft && last_x >= x){
+			if(beHit){
+				BeHit[1].SetTopLeft(ex,ey-3);
+				BeHit[1].ShowBitmap();
+			}
+			else{
+				Move[1].SetTopLeft(ex,ey);
+				Move[1].OnShow();
+			}
+		}
+*/
+		int HP_percent=(int)( ((double)HP/HP_total)*100 );
+		ShowHP(HP_percent,m);
+
+	}
+}
+//-------------------------------------------------------------------
+Enemy_son05::Enemy_son05(int fx,int fy){
+	//srand((int)time(NULL));//亂數種子 
+	EnemyId=5;
+	x=fx;
+	y=fy;
+	left_x=50 ,right_x=118;		//設定範圍
+	height=83;						//腳踩地點
+	HP_total=300;
+	countHit=HitTime=30;//打鬥間隔
+	count_move=moveTime=rand()%250+100; //移動時間
+	count_wait=waitTime=rand()%200+50;		//警戒間隔
+	//MOVE_RANGE =150; //怪物的移動範圍
+	MOVE_RANGE = rand()%300+100; //範圍在100到500之間
+	center=(left_x+right_x)/2;
+	STEP_SIZE = 2;	//移動量
+	MODIFY_PCH = 2; //圖片的修改高度
+
+	//es02.push_back( new EnemySkill_son02() );
+
+	Move[0].SetDelayCount(6);
+	Move[1].SetDelayCount(6);
+
+}
+void Enemy_son05::LoadBitmap(){
+	string temp[13]={"0","1","2","3","4","5","6","7","8","9","10","11","12"};
+	string rl[2]={"r","l"};
+	Vanish[0].LoadBitmap("Bitmaps/enemy/monky/die_r_3.bmp",RGB(0,255,255));
+	Vanish[1].LoadBitmap("Bitmaps/enemy/monky/die_r_3.bmp",RGB(0,255,255));
+	for(int j=0;j<2;j++){
+
+		BeHit[j].LoadBitmap((char *)("Bitmaps/enemy/pinkMonky/behit_"+rl[j]+".bmp").c_str(),RGB(0,255,255));
+
+		for(int i=0;i<13;i++){
+			if(i < 6){
+				Move[j].AddBitmap((char *)("Bitmaps/enemy/pinkMonky/move_"+rl[j]+"_"+temp[i]+".bmp").c_str(),RGB(0,255,255) );
+				//if(i<3)
+				//Die[j].AddBitmap((char *)("Bitmaps/enemy/pinkMonky/die_"+rl[j]+"_"+temp[i]+".bmp").c_str(),RGB(0,255,255));
+				if(i<4)
+					Stand[j].AddBitmap((char *)("Bitmaps/enemy/pinkMonky/stand_"+rl[j]+"_"+temp[i]+".bmp").c_str(),RGB(0,255,255));
+			}
+			Attack[j].AddBitmap((char *)("Bitmaps/enemy/pinkMonky/attack_"+rl[j]+"_"+temp[i]+".bmp").c_str(),RGB(0,255,255) );
+		}
+	}
+	//for(int i=0;i<(int)es02.size();i++)
+		//es02[i]->LoadBitmap();
+}
+bool Enemy_son05::InArea(Chero *h){//攻擊範圍中
+	int Area=100;
+	int Center = (GetX1()+GetX2())/2; //取怪物X軸的中心點
+	int hero_center=(h->GetX1()+h->GetX2())/2;
+	bool condition1=(GetX2()+Area)>(h->GetX1());
+	bool condition2=(GetX1()-Area)<(h->GetX2());
+
+	if( condition1 && condition2 && h->GetY2()<=GetY2() && h->GetY2()>=GetY1()){
+		if(Center<= hero_center )
+			isLeft=false;
+		else
+			isLeft=true;
+		return true;	
+	}
+	return false;
+}
+void Enemy_son05::HitAI(Chero *h,Map *m){//攻擊型態
+	if(!isAttack && InArea(h) ){
+		//if(GetX2()<= h->GetX1()  && h->GetY2()<=GetY2() && h->GetY2()>=GetY1() &&  GetX2()< m->GetMapW())
+			//x+=STEP_SIZE;
+		//else if( GetX1()>= h->GetX2() && h->GetY2()<=GetY2() && h->GetY2()>=GetY1() && GetX1()>0 )
+			//x-=STEP_SIZE;	
+	}
+
+	int area=100;
+	
+	if( !isAttack && !beHit){//沒打人，沒被打
+	
+	//if(!isAttack){
+		//for(int i=0;i<(int)es02.size();i++) 
+			//es02[i]->SetIsEndPicture(false);
+	//}
+		if(countHit==HitTime){
+			if( (GetX2()+area)>(h->GetX1()) && (GetX1()-area)<(h->GetX2())  && h->GetY2()<=GetY2() && h->GetY2()>=GetY1() && isAttack==false){
+				isAttack=true;
+				countHit--;
+			}
+		}
+		else if(countHit<HitTime)
+			countHit--;
+	}
+	if(countHit<0)
+		countHit=HitTime;
+
+	
+	//for(int i=0;i<(int)es02.size();i++) 
+		//es02[i]->EonMove(this,m);
+
+	if(Attack[0].IsFinalBitmap()||Attack[1].IsFinalBitmap()){ 
+		Attack[0].Reset();
+		Attack[1].Reset();
+		isAttack=false;
+	}
+	/*
+	if(!isAttack){
+		for(int i=0;i<(int)es01.size();i++) 
+			es01[i]->SetIsEndPicture(false);
+	}
+	*/
+}
+void Enemy_son05::onMove(Map* m,Chero *h){
+	
+	srand((int)time(NULL));//亂數種子 用來對每隻怪物的移動範圍取亂數!
+
+	int direction =rand()%9+1; //1為左
+	//int IsStand = rand()%10+1; //1是站著
+	for(int i=0;i<2;i++){
+		Move[i].OnMove();
+		Stand[i].OnMove();
+		//Die[i].OnMove();
+		if(isAttack ){
+			Attack[i].OnMove();
+		}
+	}
+	
+	last_x=x; //上一個座標儲存 用在貼圖判斷
+		
+	if(IsAlive() ){//存活時
+		
+		if(h->IsAttack()!=hit_num ||h->IsAttack()==0)
+			beHit=false;
+		
+		beHit_by_Hero1(h,m);
+
+		//if(!beHit){
+			HitAI(h,m);
+			if(!isAttack && !InArea(h) ){//讓怪物可以不要一直走動偶爾可以停一下
+				if(count_wait==waitTime ){	
+					Walking(h,m);	//怪物移動的範圍
+					count_move--;
+					if(count_move<0)
+						count_wait--;
+				}
+				else{
+					count_wait--;		//警戒間隔
+					this->SetIsLeft(direction);
+					if(count_wait<0){
+						moveTime=rand()%250+100;
+						waitTime=rand()%250+50;
+						count_move=moveTime;
+						count_wait=waitTime;
+					}
+				}
+			}
+		//}
+		onfloor(m);
+
+
+		if(HP<=0){//沒血時
+			beHit=false; //設定狀態為死亡		
+			SetIsAlive(false);
+		}
+
+	}
+	else{			//死亡	
+		HP=HP_total;
+		isAttack=false;
+	}
+}
+/*
+bool Enemy_son05::isHitHero(Chero *h){ //香蕉圖片能傷到主角的Func
+	int sx1,sx2,sy1,sy2;
+	for(int i=0;i<(int)es02.size();i++){
+		sx1=es02[i]->GetX1();
+		sx2=es02[i]->GetX2();
+		sy1=es02[i]->GetY1();
+		sy2=es02[i]->GetY2();
+		if(h->HitRectangle(sx1,sy1,sx2,sy2) && isAttack && GetAttack().GetCurrentBitmapNumber()>=5)
+			return true;
+	}
+	return false;
+}
+*/
+void  Enemy_son05::onShow(Map* m)
+{
+	//if(isAttack  )
+		//for(int i=0;i<(int)es02.size();i++) 
+			//es02[i]->EonShow(this,m);	
+	Enemy_basic::onShow(m);
+}
+int Enemy_son05::GetX1(){
+	return x+left_x;
+}
+int Enemy_son05::GetX2(){
+	return x+right_x;
+}
+int Enemy_son05::GetY1(){
+	return y+20; //猴子的頭頭座標
+}
+int Enemy_son05::GetY2(){
+	return y+height;
+}
+CAnimation Enemy_son05::GetAttack(){
+	if(!isLeft)
+		return Attack[0];
+	else
+		return Attack[1];
+}
+
+}
